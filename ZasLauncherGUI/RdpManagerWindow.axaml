@@ -1,0 +1,12 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ZasLauncherGUI.RdpManagerWindow"
+        Width="1200"
+        Height="800"
+        MinWidth="900"
+        MinHeight="600"
+        CanResize="True"
+        WindowStartupLocation="CenterScreen"
+        Title="RDP připojení pro ZAS Group s.r.o.">
+    <TabControl Name="Tabs"/>
+</Window>

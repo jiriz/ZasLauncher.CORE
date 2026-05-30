@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using SkiaSharp;
@@ -14,6 +15,10 @@ using System.Threading.Tasks;
 using System.Xml;
 using MsBox.Avalonia;
 using MsBox.Avalonia.Enums;
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using ZASutility.Standard;
 
 namespace ZasLauncherGUI.Utility;
 
@@ -40,7 +45,7 @@ public class Utils
 
             request.Headers.TryAddWithoutValidation(
                 "hwid",
-                GetHash(GetMacAddresses())
+                GetDeviceId()
             );
             request.Headers.TryAddWithoutValidation(
                 "Connection",
@@ -59,10 +64,10 @@ public class Utils
                 var line = item
                     ?.SelectSingleNode("nazev")
                     ?.InnerText;
-                
+
                 if (!String.IsNullOrEmpty(line))
                 {
-                    if (!String.IsNullOrEmpty(item?.SelectSingleNode("cesta_exe")?.InnerText) || 
+                    if (!String.IsNullOrEmpty(item?.SelectSingleNode("cesta_exe")?.InnerText) ||
                         (bool)item?.SelectSingleNode("parametry")?.InnerText.Contains("#RDP_ID") ||
                         (bool)item?.SelectSingleNode("parametry")?.InnerText.Contains("#CREATE_ISK_PATCH;"))
                     {
@@ -73,6 +78,7 @@ public class Utils
                         }
                     }
                 }
+
                 result.Add(line);
             }
         }
@@ -90,45 +96,18 @@ public class Utils
         return result;
     }
 
-    public static string GetMacAddresses()
+    public static string GetDeviceId()
     {
-        var result = new StringBuilder();
-        try
-        {
-            var nics = NetworkInterface.GetAllNetworkInterfaces();
-            foreach (var adapter in nics)
-            {
-                var address = adapter.GetPhysicalAddress();
-                var bytes = address.GetAddressBytes();
-                if (bytes.Length == 0)
-                    continue;
-                result.Append("<mac_address>");
-                for (var i = 0; i < bytes.Length; i++)
-                {
-                    result.Append(bytes[i].ToString("X2"));
-                    if (i != bytes.Length - 1)
-                        result.Append("-");
-                }
-
-                result.Append("</mac_address>");
-            }
-        }
-        catch
-        {
-            // případně zalogovat
-        }
-
-        return result.ToString();
+        var source =
+            Environment.MachineName +
+            "|" +
+            Environment.UserName;
+        using var sha = SHA256.Create();
+        var hash = sha.ComputeHash(
+            Encoding.UTF8.GetBytes(source));
+        return Convert.ToHexString(hash)[..32];
     }
-
-    private static string GetHash(string s)
-    {
-        MD5 sec = new MD5CryptoServiceProvider();
-        ASCIIEncoding enc = new ASCIIEncoding();
-        byte[] bt = enc.GetBytes(s);
-        return GetHexString(sec.ComputeHash(bt));
-    }
-
+    
     private static string GetHexString(byte[] bt)
     {
         string s = string.Empty;
@@ -151,5 +130,124 @@ public class Utils
         }
 
         return s;
+    }
+
+    public static Task KillProcessesAsync(string processName)
+    {
+        return Task.Run(() =>
+        {
+            foreach (var process in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    process.Kill();
+                    process.WaitForExit(3000);
+                }
+                catch
+                {
+                    // proces už mohl skončit / nejsou práva
+                }
+            }
+        });
+    }
+
+    public static async Task KillProcessInAllWindowsVMs(string processName)
+    {
+        var listPsi = new ProcessStartInfo
+        {
+            FileName = "prlctl",
+            Arguments = "list --json",
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var listProcess = Process.Start(listPsi);
+
+        if (listProcess == null)
+            return;
+
+        var json = await listProcess.StandardOutput.ReadToEndAsync();
+
+        await listProcess.WaitForExitAsync();
+
+        using var doc = JsonDocument.Parse(json);
+
+        foreach (var vm in doc.RootElement.EnumerateArray())
+        {
+            var name = vm.GetProperty("name").GetString();
+
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            try
+            {
+                var killPsi = new ProcessStartInfo
+                {
+                    FileName = "prlctl",
+                    Arguments =
+                        $"exec \"{name}\" taskkill /IM {processName}.exe /F",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var killProcess = Process.Start(killPsi);
+
+                if (killProcess != null)
+                    await killProcess.WaitForExitAsync();
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+    }
+
+    public static async Task<string> GetRdpParamsAsync(string rdpId)
+    {
+        try
+        {
+            var url = "https://iserver.zasgroup.cz/zas-service/get-data-rdp" +
+                      "?&token=BB0489CE-4C13-4E1E-897B-DEC4F706E5E4" +
+                      "&user=" + Uri.EscapeDataString(Environment.UserName) +
+                      "&rdp_id=" + Uri.EscapeDataString(rdpId);
+
+            var handler = new HttpClientHandler
+            {
+                AutomaticDecompression =
+                    DecompressionMethods.GZip |
+                    DecompressionMethods.Deflate
+            };
+            using var client = new HttpClient(handler);
+            client.Timeout = TimeSpan.FromSeconds(10);
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+
+            request.Headers.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("text/xml")
+            );
+
+            request.Headers.TryAddWithoutValidation(
+                "hwid",
+                GetDeviceId()
+            );
+            request.Headers.TryAddWithoutValidation(
+                "Connection",
+                "Keep-Alive"
+            );
+            request.Content = new StringContent("");
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/xml");
+            var response = await client.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            var xml = await response.Content.ReadAsStringAsync();
+            var xmlDocument = new XmlDocument();
+            xmlDocument.LoadXml(xml);
+            xmlDocument.LoadXml(xml);
+
+            return MyUtility.GetStringXmlValue(xmlDocument.DocumentElement, "parametry");
+        }
+        catch (Exception ex)
+        {
+            throw new Exception(ex.Message);
+        }
     }
 }

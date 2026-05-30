@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>{{APP_NAME}}</string>
+    <key>CFBundleDisplayName</key>
+    <string>{{APP_NAME}}</string>
+    <key>CFBundleExecutable</key>
+    <string>{{LAUNCHER_NAME}}</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.example.{{APP_NAME}}</string>
+    <key>CFBundleVersion</key>
+    <string>{{NEW_VERSION}}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>{{APP_NAME}}</string>
+        <key>CFBundleTypeRole</key>
+        <string>Viewer</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>zst</string>
+        </array>
+      </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <!-- Plain Text -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Plain Text File</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>txt</string>
+                <string>log</string>
+                <string>md</string>
+                <string>csv</string>
+                <string>tsv</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+        </dict>
+        <!-- XML -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>XML and Markup File</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>xml</string>
+                <string>xsd</string>
+                <string>xslt</string>
+                <string>axaml</string>
+                <string>ascx</string>
+                <string>aspx</string>
+                <string>csproj</string>
+                <string>targets</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.xml</string>
+            </array>
+        </dict>
+        <!-- Config -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Configuration File</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>config</string>
+                <string>ini</string>
+                <string>cfg</string>
+                <string>json</string>
+                <string>yaml</string>
+                <string>yml</string>
+                <string>toml</string>
+                <string>props</string>
+                <string>lic</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.text</string>
+            </array>
+        </dict>
+        <!-- Scripts -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Script or Code File</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>bat</string>
+                <string>cs</string>
+                <string>sql</string>
+                <string>opvn</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.text</string>
+            </array>
+        </dict>
+        <!-- Other -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Other Text-based File</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>zas</string>
+                <string>bak</string>
+                <string>info</string>
+                <string>html</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.text</string>
+            </array>
+        </dict>
+    </array>
+    <key>CFBundleIconFile</key>
+    <string>{{ICON_SRC}}</string>
+</dict>
+</plist>

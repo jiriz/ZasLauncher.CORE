@@ -4,6 +4,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZasLauncher", "ZasLauncher\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZasLauncherGUI", "ZasLauncherGUI\ZasLauncherGUI.csproj", "{A653288D-20A3-4947-A8AF-CECD7DFCA780}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZASutility.Standard", "..\..\..\..\..\ZASproducts\Asnet.Karat\_alfa\ZASutility.Standard\ZASutility.Standard.csproj", "{AFD83221-9720-4693-951B-1EE859CA8E05}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -18,5 +20,9 @@ Global
 		{A653288D-20A3-4947-A8AF-CECD7DFCA780}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A653288D-20A3-4947-A8AF-CECD7DFCA780}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A653288D-20A3-4947-A8AF-CECD7DFCA780}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AFD83221-9720-4693-951B-1EE859CA8E05}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AFD83221-9720-4693-951B-1EE859CA8E05}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AFD83221-9720-4693-951B-1EE859CA8E05}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AFD83221-9720-4693-951B-1EE859CA8E05}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

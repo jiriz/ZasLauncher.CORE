@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AvaloniaProject">
+    <option name="projectPerEditor">
+      <map>
+        <entry key="ZasLauncher/MainWindow.axaml" value="ZasLauncher/ZasLauncher.csproj" />
+        <entry key="ZasLauncherGUI/App.axaml" value="ZasLauncherGUI/ZasLauncherGUI.csproj" />
+        <entry key="ZasLauncherGUI/MainWindow.axaml" value="ZasLauncherGUI/ZasLauncherGUI.csproj" />
+        <entry key="ZasLauncherGUI/RdpManagerWindow.axaml" value="ZasLauncherGUI/ZasLauncherGUI.csproj" />
+        <entry key="ZasLauncherGUI/RdpWindow.axaml" value="ZasLauncherGUI/ZasLauncherGUI.csproj" />
+        <entry key="ZasLauncherGUI/Window1.axaml" value="ZasLauncherGUI/ZasLauncherGUI.csproj" />
+      </map>
+    </option>
+  </component>
+</project>
