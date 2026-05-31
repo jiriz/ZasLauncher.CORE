@@ -5,26 +5,15 @@
         <Nullable>enable</Nullable>
         <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <RuntimeIdentifiers>osx-x64;osx-arm64;win-x64</RuntimeIdentifiers>
-        <ApplicationManifest>app.manifest</ApplicationManifest>
-        <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-        <CustomMacOSAppBundle>true</CustomMacOSAppBundle>
-        <MacOSAppBundleInfoPlist>Info.plist</MacOSAppBundleInfoPlist>
-        <ApplicationManifest>app.manifest</ApplicationManifest>
-        <ApplicationTitle>ZasLauncher</ApplicationTitle>
-        <ApplicationId>cz.zasgroup.zaslauncher</ApplicationId>
-        <MacOSAppBundle>true</MacOSAppBundle>
-        <GenerateFilesForMacCatalyst>true</GenerateFilesForMacCatalyst>
-        <ApplicationIcon>Assets\zasgroup.ico</ApplicationIcon>
-        <CFBundleIdentifier>cz.zasgroup.zaslauncher</CFBundleIdentifier>
-        <CFBundleName>ZasLauncher</CFBundleName>
-        <CFBundleDisplayName>ZasLauncher</CFBundleDisplayName>
-        <LSUIElement>true</LSUIElement>
-        <AssemblyName>ZasLauncher</AssemblyName>
-        <RootNamespace>ZasLauncher</RootNamespace>
-        <Version>1.0.0.3</Version>
+        <ApplicationManifest Condition="'$(RuntimeIdentifier)' == 'win-x64'">app.manifest</ApplicationManifest>
+        <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+        <Version>1.0.0.9</Version>
+        <AssemblyName>ZasLauncherGUI</AssemblyName>
+        <RootNamespace>ZasLauncherGUI</RootNamespace>
     </PropertyGroup>
     <PropertyGroup>
-        <PublishSingleFile>true</PublishSingleFile>
+        <PublishSingleFile Condition="'$(RuntimeIdentifier)' == 'win-x64'">true</PublishSingleFile>
+        <PublishSingleFile Condition="'$(RuntimeIdentifier)' != 'win-x64'">false</PublishSingleFile>
         <SelfContained>true</SelfContained>
     </PropertyGroup>
     <ItemGroup>
@@ -35,17 +24,12 @@
         <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
         <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.3" />
         <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.3" />
-        <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
-        <PackageReference Include="Avalonia.Diagnostics" Version="11.3.15">
-            <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
-            <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
-        </PackageReference>
         <PackageReference Include="MessageBox.Avalonia" Version="12.0.0" />
     </ItemGroup>
     <ItemGroup>
         <AvaloniaResource Include="Assets/*" />
     </ItemGroup>
     <ItemGroup>
-      <ProjectReference Include="..\..\..\..\..\..\ZASproducts\Asnet.Karat\_alfa\ZASutility.Standard\ZASutility.Standard.csproj" />
+        <ProjectReference Include="..\..\..\..\..\..\ZASproducts\Asnet.Karat\_alfa\ZASutility.Standard\ZASutility.Standard.csproj" />
     </ItemGroup>
 </Project>
