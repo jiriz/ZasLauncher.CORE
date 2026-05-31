@@ -103,7 +103,7 @@ public static class ProcessLauncher
 
         var psi = new ProcessStartInfo
         {
-            FileName = "prlctl",
+            FileName = ParallelsPrlctl.ExecutablePath,
             UseShellExecute = false,
             CreateNoWindow = true
         };
@@ -130,67 +130,71 @@ public static class ProcessLauncher
     /// </summary>
     private static async Task<string?> FindFirstRunningWindowsVmAsync()
     {
-        try
+        var psi = new ProcessStartInfo
         {
-            var psi = new ProcessStartInfo
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            FileName = ParallelsPrlctl.ExecutablePath
+        };
+
+        psi.ArgumentList.Add("list");
+        psi.ArgumentList.Add("--json");
+
+        using var process = Process.Start(psi);
+
+        if (process == null)
+            throw new Exception("Nepodařilo se spustit prlctl.");
+
+        var json = await process.StandardOutput.ReadToEndAsync();
+        var error = await process.StandardError.ReadToEndAsync();
+
+        await process.WaitForExitAsync();
+
+        if (process.ExitCode != 0)
+        {
+            throw new Exception(
+                "Příkaz prlctl list --json selhal." +
+                (string.IsNullOrWhiteSpace(error) ? string.Empty : "\n\n" + error.Trim()));
+        }
+
+        using var doc = JsonDocument.Parse(json);
+
+        foreach (var vm in doc.RootElement.EnumerateArray())
+        {
+            var status = vm.TryGetProperty("status", out var s)
+                ? s.GetString()
+                : null;
+
+            var osType = vm.TryGetProperty("os", out var o)
+                ? o.GetString()
+                : null;
+
+            // Bereme první VM ve stavu "running", jejíž OS obsahuje "win"
+            if (string.Equals(status, "running", StringComparison.OrdinalIgnoreCase) &&
+                osType != null &&
+                osType.Contains("win", StringComparison.OrdinalIgnoreCase))
             {
-                FileName = "prlctl",
-                Arguments = "list --json",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-
-            if (process == null)
-                return null;
-
-            var json = await process.StandardOutput.ReadToEndAsync();
-
-            await process.WaitForExitAsync();
-
-            using var doc = JsonDocument.Parse(json);
-
-            foreach (var vm in doc.RootElement.EnumerateArray())
-            {
-                var status = vm.TryGetProperty("status", out var s)
-                    ? s.GetString()
+                return vm.TryGetProperty("name", out var n)
+                    ? n.GetString()
                     : null;
-
-                var osType = vm.TryGetProperty("os", out var o)
-                    ? o.GetString()
-                    : null;
-
-                // Bereme první VM ve stavu "running", jejíž OS obsahuje "win"
-                if (string.Equals(status, "running", StringComparison.OrdinalIgnoreCase) &&
-                    osType != null &&
-                    osType.Contains("win", StringComparison.OrdinalIgnoreCase))
-                {
-                    return vm.TryGetProperty("name", out var n)
-                        ? n.GetString()
-                        : null;
-                }
-            }
-
-            // Záloha: první running VM bez ohledu na OS
-            foreach (var vm in doc.RootElement.EnumerateArray())
-            {
-                var status = vm.TryGetProperty("status", out var s)
-                    ? s.GetString()
-                    : null;
-
-                if (string.Equals(status, "running", StringComparison.OrdinalIgnoreCase))
-                {
-                    return vm.TryGetProperty("name", out var n)
-                        ? n.GetString()
-                        : null;
-                }
             }
         }
-        catch
+
+        // Záloha: první running VM bez ohledu na OS
+        foreach (var vm in doc.RootElement.EnumerateArray())
         {
-            // prlctl není dostupný nebo selhal
+            var status = vm.TryGetProperty("status", out var s)
+                ? s.GetString()
+                : null;
+
+            if (string.Equals(status, "running", StringComparison.OrdinalIgnoreCase))
+            {
+                return vm.TryGetProperty("name", out var n)
+                    ? n.GetString()
+                    : null;
+            }
         }
 
         return null;

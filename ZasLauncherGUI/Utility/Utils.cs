@@ -155,7 +155,7 @@ public class Utils
     {
         var listPsi = new ProcessStartInfo
         {
-            FileName = "prlctl",
+            FileName = ParallelsPrlctl.ExecutablePath,
             Arguments = "list --json",
             RedirectStandardOutput = true,
             UseShellExecute = false,
@@ -184,7 +184,7 @@ public class Utils
             {
                 var killPsi = new ProcessStartInfo
                 {
-                    FileName = "prlctl",
+                    FileName = ParallelsPrlctl.ExecutablePath,
                     Arguments =
                         $"exec \"{name}\" taskkill /IM {processName}.exe /F",
                     UseShellExecute = false,
