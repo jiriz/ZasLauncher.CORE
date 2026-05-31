@@ -254,7 +254,7 @@ public partial class App : Application
             else if (title.ToLowerInvariant().Contains("isk") || path.ToLowerInvariant().Contains("ISKarat.Loader.Win.exe".ToLowerInvariant()))
                 icon = "karat.ico";
             else if (text.Contains("zshop") || text.Contains("i_web"))
-                icon = "zasgroup.ico";
+                icon = "zasgroup-web.ico";
             else if (title.ToLowerInvariant().Contains("configurator"))
                 icon = "hammer.ico";
             else if (text.Contains("teams"))
@@ -395,12 +395,11 @@ public partial class App : Application
                         rdpPass = MyCryptography.EncodeZasPassword(rdpPass);
 
                     int rdpPort = MyUtility.StringToInt(MyStringExtensions.GetDirective(rdpParams, "RDP_PORT"));
-                    if (rdpPort == 0) rdpPort = 3389;
+                    var rdpEndpoint = RdpEndpoint.Normalize(rdpServer, rdpPort);
 
                     var tabName = string.IsNullOrEmpty(rdpName) ? name : rdpName;
-                    var host    = rdpPort != 3389 ? $"{rdpServer}:{rdpPort}" : rdpServer;
 
-                    OpenRdpTab(tabName, host, rdpUser, rdpPass);
+                    OpenRdpTab(tabName, rdpEndpoint.Host, rdpEndpoint.Port, rdpUser, rdpPass);
                 }
                 else
                 {
@@ -424,14 +423,21 @@ public partial class App : Application
         }
     }
     
-    private void OpenRdpTab(string name, string host, string username, string password)
+    private void OpenRdpTab(string name, string host, int port, string username, string password)
     {
         if (_rdpWindow == null)
         {
+            MacDockIcon.SetVisible(true);
             _rdpWindow = new RdpManagerWindow();
-            _rdpWindow.Closed += (_, _) => _rdpWindow = null;
+            _rdpWindow.Closed += (_, _) =>
+            {
+                _rdpWindow = null;
+                MacDockIcon.SetVisible(false);
+            };
         }
-        _rdpWindow.AddRdpTab(name,host, username, password);
+
+        _rdpWindow.AddRdpTab(name, host, port, username, password);
+        MacDockIcon.SetVisible(true);
         _rdpWindow.Show();
         _rdpWindow.Activate();
     }

@@ -53,18 +53,19 @@ public partial class RdpManagerWindow : Window
         };
     }
 
-    public void AddRdpTab(string name, string host, string username, string password)
+    public void AddRdpTab(string name, string host, int port, string username, string password)
     {
-        var tabTitle = $"{name} – {host} ({username})";
+        var displayEndpoint = RdpEndpoint.Format(host, port);
+        var tabTitle = $"{name} – {displayEndpoint} ({username})";
         Control content;
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            content = new RdpSessionControl(host, username, password, tabTitle);
+            content = new RdpSessionControl(host, port, username, password, tabTitle);
         }
         else
         {
-            content = MakeErrorPanel(host, username,
+            content = MakeErrorPanel(displayEndpoint, username,
                 "Embedded RDP je momentálně podporováno pouze na macOS.");
         }
 

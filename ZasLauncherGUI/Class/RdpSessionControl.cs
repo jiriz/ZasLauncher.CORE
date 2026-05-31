@@ -10,6 +10,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using ZasLauncherGUI.Utility;
 
 namespace ZasLauncherGUI.Class;
 
@@ -26,6 +27,7 @@ public class RdpSessionControl : UserControl
     private const int RemoteScalePercent = 180;
 
     private readonly string _host;
+    private readonly int _port;
     private readonly string _username;
     private readonly string _password;
     private readonly string _windowTitle;
@@ -39,9 +41,10 @@ public class RdpSessionControl : UserControl
     private bool _hasAutoConnected;
     private bool _isDisconnecting;
 
-    public RdpSessionControl(string host, string username, string password, string windowTitle)
+    public RdpSessionControl(string host, int port, string username, string password, string windowTitle)
     {
         _host = host;
+        _port = RdpEndpoint.NormalizePort(port);
         _username = username;
         _password = password;
         _windowTitle = windowTitle;
@@ -99,7 +102,7 @@ public class RdpSessionControl : UserControl
             {
                 new TextBlock
                 {
-                    Text = $"Host: {_host}",
+                    Text = $"Host: {RdpEndpoint.Format(_host, _port)}",
                     HorizontalAlignment = HorizontalAlignment.Center,
                     FontWeight = FontWeight.Bold
                 },
@@ -136,7 +139,7 @@ public class RdpSessionControl : UserControl
             return;
         }
 
-        SetStatus($"Připojuji se k {_host}…");
+        SetStatus($"Připojuji se k {RdpEndpoint.Format(_host, _port)}…");
 
         var processDisplayName = GetProcessDisplayName(_windowTitle);
         var appBundle = GetConnectionAppBundle(sdlBin, processDisplayName, _instanceId);
@@ -148,6 +151,10 @@ public class RdpSessionControl : UserControl
         psi.Environment["SDL_APP_NAME"] = appBundle.ProcessName;
 
         psi.ArgumentList.Add($"/v:{_host}");
+
+        if (_port != RdpEndpoint.DefaultPort)
+            psi.ArgumentList.Add($"/port:{_port}");
+
         psi.ArgumentList.Add($"/u:{_username}");
         psi.ArgumentList.Add($"/p:{_password}");
         psi.ArgumentList.Add("/cert:ignore");

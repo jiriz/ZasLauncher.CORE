@@ -204,17 +204,20 @@ public static class ProcessLauncher
         string exeOrFile,
         string args)
     {
+        var isUrl = IsWebUrl(exeOrFile);
         var psi = new ProcessStartInfo
         {
-            FileName = "open",
+            FileName = "/usr/bin/open",
             UseShellExecute = false,
             CreateNoWindow = true
         };
 
-        psi.ArgumentList.Add("-n");
+        if (!isUrl)
+            psi.ArgumentList.Add("-n");
+
         psi.ArgumentList.Add(exeOrFile);
 
-        if (!string.IsNullOrWhiteSpace(args))
+        if (!isUrl && !string.IsNullOrWhiteSpace(args))
         {
             psi.ArgumentList.Add("--args");
             psi.ArgumentList.Add(args);
@@ -246,6 +249,12 @@ public static class ProcessLauncher
                char.IsLetter(path[0]) &&
                path[1] == ':' &&
                path[2] == '\\';
+    }
+
+    private static bool IsWebUrl(string path)
+    {
+        return Uri.TryCreate(path, UriKind.Absolute, out var uri) &&
+               (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
     }
 
     private static string ModifyArgsByParameters(
