@@ -50,7 +50,7 @@ internal static class MacDockIcon
 
     private static void SetApplicationIcon(IntPtr app)
     {
-        using var source = AssetLoader.Open(new Uri("avares://ZasLauncherGUI/Assets/launcher.png"));
+        using var source = AssetLoader.Open(new Uri("avares://ZasLauncherGUI/Assets/launcher-dock.png"));
         using var buffer = new MemoryStream();
         source.CopyTo(buffer);
         var bytes = buffer.ToArray();
