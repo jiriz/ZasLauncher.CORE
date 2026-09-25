@@ -17,8 +17,8 @@ await session.Dispatch(async () =>
     var a = new RdpSessionControl("127.0.0.1", port, "test", "", "Local A");
     var b = new RdpSessionControl("127.0.0.1", port, "test", "", "Local B");
     var tabs = new TabControl();
-    var tabA = new TabItem { Header = "Test A", Content = a };
-    var tabB = new TabItem { Header = "Test B", Content = b };
+    var tabA = RdpTabHeader.Create("Axial", "Axial – localhost", a, async _ => await a.CloseAsync());
+    var tabB = RdpTabHeader.Create("IPM - Lösungen aus Stahl s.r.o. - karat.server", "IPM - Lösungen aus Stahl s.r.o. - karat.server", b, async _ => await b.CloseAsync());
     tabs.Items.Add(tabA); tabs.Items.Add(tabB);
     var window = new Window { Width = 1200, Height = 800, Content = tabs };
     try
@@ -39,14 +39,24 @@ await session.Dispatch(async () =>
         tabs.SelectedItem = tabB;
         window.KeyReleaseQwerty(PhysicalKey.ControlLeft, RawInputModifiers.None);
         await Task.Delay(150);
+        Require(tabA.Bounds.Width == RdpTabHeader.TabWidth && tabB.Bounds.Width == RdpTabHeader.TabWidth, "Tab widths differ");
+        Require(((Grid)tabB.Header!).Children.OfType<TextBlock>().Single().TextTrimming == Avalonia.Media.TextTrimming.CharacterEllipsis, "Missing ellipsis");
+        Require(Equals(ToolTip.GetTip((Control)tabB.Header!), tabB.Tag), "Missing full-title tooltip");
+        Require(!b.GetVisualDescendants().OfType<Button>().Any(), "Toolbar buttons still present");
+        // Invoke A's menu while B is selected: the action must stay bound to A.
+        var disconnectA = ((Control)tabA.Header!).ContextMenu!.Items.OfType<MenuItem>().Single(x => Equals(x.Header, "Odpojit"));
+        disconnectA.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        await Task.Delay(150);
+        Require(b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Připojeno"), "Context menu targeted the selected tab instead");
         using var screenshot = window.CaptureRenderedFrame();
         Require(screenshot != null, "No rendered UI frame");
         screenshot!.Save(Path.Combine(Path.GetTempPath(), "zas-rdp-ui.png"));
         await a.CloseAsync(); tabs.Items.Remove(tabA);
         await Task.Delay(150);
         Require(b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Připojeno"), "B disconnected when A closed");
-        var reconnect = b.GetVisualDescendants().OfType<Button>().Single(x => Equals(x.Content, "Připojit znovu"));
-        reconnect.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        var header = (Control)tabB.Header!;
+        var reconnect = header.ContextMenu!.Items.OfType<MenuItem>().Single(x => Equals(x.Header, "Připojit znovu"));
+        reconnect.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         await Task.Delay(250); await WaitImage(b);
         Require(RdpKeyboard.ScanCode(PhysicalKey.ControlRight) == 0x11d, "Extended scancode");
         Require(RdpKeyboard.ScanCode(PhysicalKey.Delete) == 0x153, "Delete scancode");

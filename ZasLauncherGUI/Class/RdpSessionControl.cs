@@ -48,20 +48,10 @@ public sealed class RdpSessionControl : UserControl
         _surface = new Border { Background = Brushes.Black, Child = _image, Focusable = true,
             ClipToBounds = true, HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch };
-        var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8) };
-        toolbar.Children.Add(Button("Připojit znovu", ConnectAsync));
-        toolbar.Children.Add(Button("Odpojit", DisconnectAsync));
-        toolbar.Children.Add(Button("Ctrl+Alt+Del", () =>
-        {
-            SendKey(0x1d, true); SendKey(0x38, true); SendKey(0x153, true);
-            SendKey(0x153, false); SendKey(0x38, false); SendKey(0x1d, false);
-            _surface.Focus(); return Task.CompletedTask;
-        }));
-        toolbar.Children.Add(Button("Schránka → RDP", SendClipboardAsync));
-        toolbar.Children.Add(Button("RDP → schránka", ReceiveClipboardAsync));
-        toolbar.Children.Add(_status);
-        var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        grid.Children.Add(toolbar); Grid.SetRow(_surface, 1); grid.Children.Add(_surface); Content = grid;
+        // Keep the desktop unobstructed; connection actions belong to its tab header.
+        _status.Margin = new Thickness(8, 2);
+        var grid = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
+        grid.Children.Add(_surface); Grid.SetRow(_status, 1); grid.Children.Add(_status); Content = grid;
         _timer.Tick += (_, _) => Refresh();
         Loaded += async (_, _) =>
         {
@@ -104,17 +94,37 @@ public sealed class RdpSessionControl : UserControl
             e.Handled = true;
         };
     }
-    private Button Button(string text, Func<Task> action)
+    public ContextMenu CreateContextMenu(Control header)
     {
-        var b = new Button { Content = text };
-        b.Click += async (_, _) =>
+        var menu = new ContextMenu();
+        menu.Items.Add(ActionItem("Připojit znovu", ConnectAsync));
+        menu.Items.Add(ActionItem("Odpojit", DisconnectAsync));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(ActionItem("Ctrl+Alt+Del", () =>
         {
-            b.IsEnabled = false;
+            SendKey(0x1d, true); SendKey(0x38, true); SendKey(0x153, true);
+            SendKey(0x153, false); SendKey(0x38, false); SendKey(0x1d, false);
+            return Task.CompletedTask;
+        }));
+        menu.Items.Add(new Separator());
+        // The header remains attached even when this tab's desktop is unloaded.
+        menu.Items.Add(ActionItem("Schránka → RDP", () => SendClipboardAsync(header)));
+        menu.Items.Add(ActionItem("RDP → schránka", () => ReceiveClipboardAsync(header)));
+        return menu;
+    }
+    private MenuItem ActionItem(string text, Func<Task> action)
+    {
+        var item = new MenuItem { Header = text };
+        item.Click += async (_, e) =>
+        {
+            e.Handled = true;
+            if (_closed) return;
+            item.IsEnabled = false;
             try { await action(); }
             catch (Exception ex) { _status.Text = "RDP: " + ex.Message; }
-            finally { b.IsEnabled = !_closed; }
+            finally { item.IsEnabled = !_closed; }
         };
-        return b;
+        return item;
     }
     private async Task ConnectAsync()
     {
@@ -123,6 +133,7 @@ public sealed class RdpSessionControl : UserControl
         {
             await DisconnectCoreAsync();
             if (_closed) return;
+            _started = true;
             _status.Text = "Připojuji…";
             _serial = _cursorSerial = 0; _lastState = -1;
             _connection = new RdpConnection(_host, _port, _username, _password, 1600, 1000);
@@ -253,18 +264,18 @@ public sealed class RdpSessionControl : UserControl
         _mouseX = Math.Clamp((int)x, 0, pixels.Width - 1); _mouseY = Math.Clamp((int)y, 0, pixels.Height - 1);
         return true;
     }
-    private async Task SendClipboardAsync()
+    private async Task SendClipboardAsync(Control header)
     {
-        var c = _connection; var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        var c = _connection; var clipboard = TopLevel.GetTopLevel(header)?.Clipboard;
         if (c == null || c.State != 2 || clipboard == null) return;
         var text = await clipboard.TryGetTextAsync();
         if (c != _connection || _closed || text == null) return;
         _status.Text = c.SetClipboard(text) ? "Schránka připravena v RDP (Ctrl+V)" : "Text schránky je příliš velký.";
         _surface.Focus();
     }
-    private async Task ReceiveClipboardAsync()
+    private async Task ReceiveClipboardAsync(Control header)
     {
-        var c = _connection; var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        var c = _connection; var clipboard = TopLevel.GetTopLevel(header)?.Clipboard;
         if (c == null || clipboard == null) return;
         // Explicit transfer prevents background tabs overwriting the local clipboard.
         ulong serial = 0;

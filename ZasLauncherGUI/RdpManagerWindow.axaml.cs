@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using ZasLauncherGUI.Class;
+using ZasLauncherGUI.Rdp;
 using ZasLauncherGUI.Utility;
 
 namespace ZasLauncherGUI;
@@ -83,51 +84,13 @@ public partial class RdpManagerWindow : Window
                 "Embedded RDP je momentálně podporováno pouze na macOS.");
         }
 
-        var closeButton = new Button
+        var tab = RdpTabHeader.Create(name, tabTitle, content, async closedTab =>
         {
-            Content = "×",
-            Width = 24,
-            Height = 24,
-            Padding = new Thickness(0),
-            Margin = new Thickness(8, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-
-        var headerPanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = name,
-                    VerticalAlignment = VerticalAlignment.Center
-                },
-                closeButton
-            }
-        };
-
-        var tab = new TabItem
-        {
-            Header = headerPanel,
-            Content = content,
-            Tag = tabTitle          // uložíme plný titulek do Tag
-        };
-
-        closeButton.Click += async (_, e) =>
-        {
-            e.Handled = true;
-
-            closeButton.IsEnabled = false;
-            if (FindRdpSessionControl(tab.Content as Control) is { } ctrl)
+            if (FindRdpSessionControl(closedTab.Content as Control) is { } ctrl)
                 await ctrl.CloseAsync();
-
-            Tabs.Items.Remove(tab);
-
-            if (Tabs.Items.Count == 0)
-                Title = "RDP Manager";
-        };
+            Tabs.Items.Remove(closedTab);
+            if (Tabs.Items.Count == 0) Title = "RDP Manager";
+        });
 
         Tabs.Items.Add(tab);
         Tabs.SelectedItem = tab;
