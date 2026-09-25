@@ -32,6 +32,9 @@ public sealed class RdpSessionControl : UserControl
     private readonly HashSet<int> _buttons = new();
     private RdpConnection? _connection;
     private RdpClipboardSync? _clipboardSync;
+    private Window? _ownerWindow;
+    private IPointer? _capturedPointer;
+    private bool _releasing;
     private bool _pastePending, _swallowPasteUp;
     private WriteableBitmap? _bitmap;
     private ulong _serial, _cursorSerial;
@@ -58,21 +61,36 @@ public sealed class RdpSessionControl : UserControl
         Loaded += async (_, _) =>
         {
             if (_closed) return;
+            _ownerWindow = TopLevel.GetTopLevel(this) as Window;
+            if (_ownerWindow != null) { _ownerWindow.Deactivated += WindowDeactivated; _ownerWindow.Activated += WindowActivated; }
+            ReleaseInputs(resetModifiers: true);
             _clipboardSync?.Resume();
             _timer.Start();
             if (!_started) { _started = true; await ConnectAsync(); }
+            Dispatcher.UIThread.Post(() => { if (!_closed && IsLoaded && _ownerWindow?.IsActive == true) _surface.Focus(); });
         };
         // Avalonia unloads inactive tab content. Keep the protocol worker alive.
-        Unloaded += (_, _) => { _timer.Stop(); _clipboardSync?.Suspend(); ReleaseInputs(); };
+        Unloaded += (_, _) =>
+        {
+            _timer.Stop(); _clipboardSync?.Suspend(); ReleaseInputs(resetModifiers: true);
+            if (_ownerWindow != null) { _ownerWindow.Deactivated -= WindowDeactivated; _ownerWindow.Activated -= WindowActivated; _ownerWindow = null; }
+        };
         _surface.LostFocus += (_, _) => ReleaseInputs();
         _surface.PointerCaptureLost += (_, _) => ReleaseInputs();
         _surface.AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
         _surface.AddHandler(KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel);
-        _surface.PointerMoved += (_, e) => { if (Locate(e.GetPosition(_surface))) SendMouse(0x0800); };
+        _surface.PointerMoved += (_, e) =>
+        {
+            var p = e.GetCurrentPoint(_surface).Properties;
+            foreach (var button in new[] { (0x1000, p.IsLeftButtonPressed), (0x2000, p.IsRightButtonPressed), (0x4000, p.IsMiddleButtonPressed) })
+                if (!button.Item2 && _buttons.Remove(button.Item1)) SendMouse(button.Item1);
+            if (Locate(e.GetPosition(_image), clamp: _buttons.Count > 0)) SendMouse(0x0800);
+        };
         _surface.PointerPressed += (_, e) =>
         {
-            if (!Locate(e.GetPosition(_surface))) return;
-            _surface.Focus(); e.Pointer.Capture(_surface);
+            if (!Locate(e.GetPosition(_image))) return;
+            _connection?.Trace($"pointer-down frame={_bitmap?.PixelSize} image={_image.Bounds.Size} remote={_mouseX},{_mouseY}");
+            _surface.Focus(); _capturedPointer = e.Pointer; e.Pointer.Capture(_surface);
             var kind = e.GetCurrentPoint(_surface).Properties.PointerUpdateKind;
             int button = kind switch { PointerUpdateKind.LeftButtonPressed => 0x1000,
                 PointerUpdateKind.RightButtonPressed => 0x2000, PointerUpdateKind.MiddleButtonPressed => 0x4000, _ => 0 };
@@ -81,17 +99,17 @@ public sealed class RdpSessionControl : UserControl
         };
         _surface.PointerReleased += (_, e) =>
         {
-            Locate(e.GetPosition(_surface), clamp: true);
+            Locate(e.GetPosition(_image), clamp: true);
             var kind = e.GetCurrentPoint(_surface).Properties.PointerUpdateKind;
             int button = kind switch { PointerUpdateKind.LeftButtonReleased => 0x1000,
                 PointerUpdateKind.RightButtonReleased => 0x2000, PointerUpdateKind.MiddleButtonReleased => 0x4000, _ => 0 };
             if (button != 0) { SendMouse(button); _buttons.Remove(button); }
-            if (_buttons.Count == 0) e.Pointer.Capture(null);
+            if (_buttons.Count == 0) { _capturedPointer = null; e.Pointer.Capture(null); }
             e.Handled = true;
         };
         _surface.PointerWheelChanged += (_, e) =>
         {
-            if (!Locate(e.GetPosition(_surface))) return;
+            if (!Locate(e.GetPosition(_image))) return;
             int delta = Math.Clamp((int)(e.Delta.Y * 120), -255, 255);
             if (delta != 0) SendMouse(0x0200 | (delta < 0 ? 0x0100 : 0) | (delta & 0x1ff));
             e.Handled = true;
@@ -180,7 +198,7 @@ public sealed class RdpSessionControl : UserControl
         {
             _status.Text = state switch { 0 or 1 => "Připojuji…", 2 => "Připojeno",
                 3 => "Odpojeno", _ => $"Připojení selhalo (0x{c.Error:X8})." };
-            _lastState = state;
+            _lastState = state; c.Trace("state=" + state);
         }
         ulong ignored = 0;
         c.Frame(IntPtr.Zero, 0, 0, 0, out int width, out int height, ref ignored);
@@ -226,8 +244,10 @@ public sealed class RdpSessionControl : UserControl
     {
         int code = RdpKeyboard.ScanCode(e.PhysicalKey);
         if (code == 0) return;
+        if (code == 0x2e && e.KeyModifiers.HasFlag(KeyModifiers.Control)) _connection?.Trace("remote-copy Ctrl+C");
         if (code == 0x2f && e.KeyModifiers.HasFlag(KeyModifiers.Control) && RdpClipboardSync.Enabled)
         {
+            _connection?.Trace("local-paste Ctrl+V");
             e.Handled = true; _swallowPasteUp = true;
             if (_pastePending) return;
             _pastePending = true;
@@ -235,8 +255,7 @@ public sealed class RdpSessionControl : UserControl
             try
             {
                 if (_clipboardSync is not { } sync || TopLevel.GetTopLevel(this) is not { } top) return;
-                await sync.TransferAsync(top, 3);
-                if (!sync.LastSucceeded) return;
+                if (!await sync.TransferAsync(top, 3)) return;
                 if (connection == _connection && !_closed && IsLoaded && _surface.IsFocused)
                 {
                     // Ctrl may have been released while files were enumerated.
@@ -268,13 +287,32 @@ public sealed class RdpSessionControl : UserControl
         if (connection.State == 2 && !_inputFailed) { _inputFailed = true; _ = DisconnectAsync(); }
         return false;
     }
-    private void ReleaseInputs()
+    private void WindowDeactivated(object? sender, EventArgs e) { _connection?.Trace("window deactivated"); ReleaseInputs(resetModifiers: true); }
+    private void WindowActivated(object? sender, EventArgs e)
     {
+        _connection?.Trace("window activated");
+        ReleaseInputs(resetModifiers: true);
+        if (!_closed && IsLoaded) _surface.Focus();
+    }
+    private void ReleaseInputs(bool resetModifiers = false)
+    {
+        if (_releasing) return;
+        _releasing = true;
+        var pointer = _capturedPointer; _capturedPointer = null;
+        pointer?.Capture(null);
         // Direct enqueue avoids recursively starting DisconnectAsync on overflow.
         bool ok = true;
         foreach (int key in _keys) if (_connection != null) ok &= _connection.Input(2, key, 0);
         foreach (int button in _buttons) if (_connection != null) ok &= _connection.Input(1, button, _mouseX, _mouseY);
-        _keys.Clear(); _buttons.Clear();
+        if (resetModifiers && _connection?.State == 2)
+        {
+            // macOS may consume releases during Cmd+Tab; LostFocus alone does not cover window deactivation.
+            foreach (int code in new[] { 0x1d, 0x11d, 0x2a, 0x36, 0x38, 0x138, 0x15b, 0x15c })
+                ok &= _connection.Input(2, code, 0);
+            foreach (int button in new[] { 0x1000, 0x2000, 0x4000 })
+                ok &= _connection.Input(1, button, _mouseX, _mouseY);
+        }
+        _keys.Clear(); _buttons.Clear(); _releasing = false;
         if (!ok && !_inputFailed && _connection?.State == 2)
         {
             _inputFailed = true;
@@ -284,7 +322,7 @@ public sealed class RdpSessionControl : UserControl
     private bool Locate(Point p, bool clamp = false)
     {
         if (_bitmap == null) return false;
-        var bounds = _surface.Bounds.Size; var pixels = _bitmap.PixelSize;
+        var bounds = _image.Bounds.Size; var pixels = _bitmap.PixelSize;
         double scale = Math.Min(bounds.Width / pixels.Width, bounds.Height / pixels.Height);
         if (scale <= 0) return false;
         double x = (p.X - (bounds.Width - pixels.Width * scale) / 2) / scale;

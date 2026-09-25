@@ -1,4 +1,4 @@
-# RDP v záložkách — ZasLauncher 1.0.0.19
+# RDP v záložkách — ZasLauncher 1.0.0.20
 
 Změna: Jarka (Codex), 25. 9. 2026.
 
@@ -182,3 +182,55 @@ Ověření:
 Lokální testovací aplikace (Apple Silicon, ad-hoc podpis):
 `/Users/jiriz/ZasLauncher-builds/1.0.0.19/ZasLauncher.app`.
 Skutečné vložení v zákaznickém Průzkumníku a Finderu zatím zůstává pro ověření Jiřím.
+
+## Okno, vstupy a schránka 1.0.0.20
+
+Jarka (Codex), 25. 9. 2026. Jiří hlásil posunuté klikání po návratu do okna
+nebo jiné záložky a nadále nefunkční schránku při správných Ctrl+C/V ve Windows.
+Běžící `/Applications/ZasLauncher.app` byla ověřena jako 1.0.0.19; SHA-256 nativní
+knihovny odpovídal sestavení 1.0.0.19. Nešlo o neaktualizovanou knihovnu.
+
+- Zavření poslední záložky zavře celý RDP Manager, včetně odpojení a uložení geometrie.
+- Název v titulku a hlavičce záložky se ořezává o krajní mezery. Přihlašovací údaje
+  zůstávají pro spojení původní.
+- Souřadnice se převádějí vůči skutečnému prvku `Image` a jeho aktuální velikosti,
+  nikoli odhadem ze středu okolního panelu. To zahrnuje posunutí při uspořádání/resize.
+- Aktivace/deaktivace okna i opuštění záložky uvolní zachycení myši, tlačítka a
+  modifikátory. Návrat obnoví fokus plochy. Pohyb myši napraví chybějící release
+  tlačítka, pokud už fyzicky stisknuté není.
+- Schránka Mac → RDP se nabídne při Ctrl+V (nebo ručním příkazu menu).
+  Periodická synchronizace už nepřepisuje právě zkopírovaný obsah Windows starší
+  kopií z Macu/Parallels. Pro paste z kontextového menu Windows lze předem použít
+  „Schránka → RDP“ v menu záložky.
+- Nová nabídka Windows vzniklá během čekání na ACK se nezahodí. Návrat do záložky
+  také nevynucuje opětovné odeslání nezměněné místní schránky.
+- Výsledek přípravy Ctrl+V se vrací přímo z asynchronní operace; nesdílí se s
+  periodickým čtením, které jej dříve mohlo přepsat.
+- RDP handshake odešle úvodní prázdnou nabídku schránky i bez předchozího místního
+  kopírování. Data se pak vyžádají standardním clipboard kanálem.
+
+Diagnostika: `LocalApplicationData/ZasLauncher/logs/rdp.log` (macOS typicky
+`~/Library/Application Support/ZasLauncher/logs/rdp.log`). Uchovává maximálně
+aktuální soubor kolem 1 MiB a jeden předchozí. Zapisuje verzi, anonymní ID relace,
+fáze protokolu, generace/ACK, typ chyby, fokus a rozměry/souřadnice kliknutí.
+Nezapisuje obsah schránky, názvy přenášených souborů, hosty, účty ani hesla.
+
+Ověření:
+
+- Headless UI: oříznutý titulek, zavření Manageru posledním křížkem, převod bodu
+  obrazu po změně rozměrů a přepnutí záložek včetně nesymetrického odsazení obrazu.
+- Schránka: nová vzdálená kopie během ACK a kopie Windows po změně Mac/Parallels
+  schránky; obě jsou přijaty. Odmítnutý místní přenos nevloží stará data.
+- Nový společný test `RdpClipboardSync` + `RdpConnection` + nativní adaptér + skutečný
+  RDP server ověřuje text oběma směry. Používá izolovanou Headless schránku.
+  Wire test nadále ověřuje bajty souborů v obou směrech.
+- Spuštění společného testu po buildu:
+  `FREERDP_SOURCE=/cesta/k/FreeRDP-3.26.0 RDP_CLIPBOARD_UI="$PWD/tests/RdpUi/bin/Debug/net10.0/RdpUi.dll" bash tests/run-clipboard-wire.sh`.
+
+Lokální aplikace: `/Users/jiriz/ZasLauncher-builds/1.0.0.20/ZasLauncher.app`.
+Pro načtení je nutné ukončit starý Launcher a spustit novou aplikaci. Konkrétní
+chování zákaznické relace a schránky Parallels zůstává k ověření v reálném používání;
+přiložené testy nejsou ověřením zákaznického Windows ani systémové schránky macOS.
+
+Build/publish macOS arm64 1.0.0.20 a ověření podpisu prošly. Wire test prošel
+také proti nativní knihovně přímo z výsledné aplikace.

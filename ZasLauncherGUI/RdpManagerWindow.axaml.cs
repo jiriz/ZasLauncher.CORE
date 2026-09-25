@@ -70,8 +70,9 @@ public partial class RdpManagerWindow : Window
     public void AddRdpTab(string name, string host, int port, string username, string password)
     {
         if (_closing) return;
+        name = name.Trim();
         var displayEndpoint = RdpEndpoint.Format(host, port);
-        var tabTitle = $"{name} – {displayEndpoint} ({username})";
+        var tabTitle = $"{name} – {displayEndpoint} ({username.Trim()})";
         Control content;
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
@@ -89,7 +90,7 @@ public partial class RdpManagerWindow : Window
             if (FindRdpSessionControl(closedTab.Content as Control) is { } ctrl)
                 await ctrl.CloseAsync();
             Tabs.Items.Remove(closedTab);
-            if (Tabs.Items.Count == 0) Title = "RDP Manager";
+            if (Tabs.Items.Count == 0) Close();
         });
 
         Tabs.Items.Add(tab);

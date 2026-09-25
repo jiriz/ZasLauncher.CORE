@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 namespace ZasLauncherGUI.Rdp;
 internal interface IRdpClipboardConnection
 {
+    void Trace(string state) { }
     int State { get; }
     bool IsStopping { get; }
     (int Kind, ulong Generation) ClipboardOffer();

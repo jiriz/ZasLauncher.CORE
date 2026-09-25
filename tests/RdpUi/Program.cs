@@ -16,6 +16,12 @@ await using var session = HeadlessUnitTestSession.StartNew(typeof(TestApp));
 await session.Dispatch(async () =>
 {
     int port = int.Parse(Environment.GetEnvironmentVariable("ZAS_RDP_TEST_PORT")!);
+    if(Environment.GetEnvironmentVariable("ZAS_RDP_CLIPBOARD_PEER")=="1")
+    {
+        var clipboardWindow=new Window();clipboardWindow.Show();
+        try {await ClipboardContract.RunWireAsync(clipboardWindow,port);return 0;}
+        finally {clipboardWindow.Close();}
+    }
     var a = new RdpSessionControl("127.0.0.1", port, "test", "", "Local A");
     var b = new RdpSessionControl("127.0.0.1", port, "test", "", "Local B");
     var tabs = new TabControl();
@@ -45,6 +51,17 @@ await session.Dispatch(async () =>
         Require(((Grid)tabB.Header!).Children.OfType<TextBlock>().Single().TextTrimming == Avalonia.Media.TextTrimming.CharacterEllipsis, "Missing ellipsis");
         Require(Equals(ToolTip.GetTip((Control)tabB.Header!), tabB.Tag), "Missing full-title tooltip");
         Require(!b.GetVisualDescendants().OfType<Button>().Any(), "Toolbar buttons still present");
+        window.Width=970;window.Height=660;await Task.Delay(100);
+        tabs.SelectedItem=tabA;await Task.Delay(80);tabs.SelectedItem=tabB;await Task.Delay(80);
+        var image=b.GetVisualDescendants().OfType<Image>().Single();
+        image.Margin=new Thickness(30,20,70,50);await Task.Delay(50);
+        var pixelSize=((WriteableBitmap)image.Source!).PixelSize;
+        var point=image.TranslatePoint(new Point(image.Bounds.Width*.25,image.Bounds.Height*.75),window)!.Value;
+        window.MouseMove(point);
+        var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+        int x=(int)typeof(RdpSessionControl).GetField("_mouseX",flags)!.GetValue(b)!;
+        int y=(int)typeof(RdpSessionControl).GetField("_mouseY",flags)!.GetValue(b)!;
+        Require(Math.Abs(x-pixelSize.Width*.25)<=2 && Math.Abs(y-pixelSize.Height*.75)<=2,"pointer mapping after resize/tab return");
         // Invoke A's menu while B is selected: the action must stay bound to A.
         var disconnectA = ((Control)tabA.Header!).ContextMenu!.Items.OfType<MenuItem>().Single(x => Equals(x.Header, "Odpojit"));
         disconnectA.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
@@ -64,6 +81,16 @@ await session.Dispatch(async () =>
         Require(RdpKeyboard.ScanCode(PhysicalKey.Delete) == 0x153, "Delete scancode");
         await Task.WhenAll(b.CloseAsync(), b.CloseAsync());
         Console.WriteLine("PASS: Avalonia tab rendering, switch, mouse/keyboard dispatch, independent close, reconnect, idempotent disposal");
+        var manager = new ZasLauncherGUI.RdpManagerWindow();
+        bool managerClosed=false;manager.Closed+=(_,_)=>managerClosed=true;
+        manager.Show(); manager.AddRdpTab("  Axial        ","127.0.0.1",port,"test","");
+        Require(manager.Title=="Axial – 127.0.0.1:"+port+" (test)","title retains padding");
+        var managerTabs=manager.FindControl<TabControl>("Tabs")!;
+        var only=(TabItem)managerTabs.Items[0]!;
+        ((Grid)only.Header!).Children.OfType<Button>().Single().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        for (int i=0;i<100 && !managerClosed;i++) await Task.Delay(20);
+        Require(managerClosed,"empty RDP Manager remained open");
+        Console.WriteLine("PASS: trimmed title and automatic last-tab manager close");
         return 0;
     }
     finally { await a.CloseAsync(); await b.CloseAsync(); window.Close(); }

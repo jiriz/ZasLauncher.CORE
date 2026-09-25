@@ -16,6 +16,7 @@ internal sealed class RdpConnection : IRdpClipboardConnection
         NativeLibrary.SetDllImportResolver(typeof(RdpConnection).Assembly, (name, _, _) =>
             name == "zasrdp" ? NativeLibrary.Load(Path.Combine(AppContext.BaseDirectory, "rdp", "libzasrdp.dylib")) : IntPtr.Zero);
     }
+    private readonly string _traceId = Guid.NewGuid().ToString("N")[..8];
     private IntPtr _handle;
     private readonly Task<int> _worker;
     private Task? _stopping;
@@ -27,9 +28,17 @@ internal sealed class RdpConnection : IRdpClipboardConnection
     {
         _handle = Native.zr_create(host, port, user, password, width, height, CultureInfo.CurrentCulture.KeyboardLayoutId);
         if (_handle == IntPtr.Zero) throw new InvalidOperationException("Nelze vytvořit RDP připojení.");
+        Trace("created version=" + typeof(RdpConnection).Assembly.GetName().Version);
         var handle = _handle;
         _worker = Task.Factory.StartNew(() => Native.zr_run(handle), CancellationToken.None,
             TaskCreationOptions.LongRunning, TaskScheduler.Default);
+    }
+    public void Trace(string state)
+    {
+        var buffer = new byte[256];
+        if (_handle != IntPtr.Zero) Native.zr_clip_diagnostics(_handle, buffer, buffer.Length);
+        int count = Array.IndexOf(buffer, (byte)0);
+        RdpTrace.Write(_traceId, state + " " + Encoding.UTF8.GetString(buffer, 0, count < 0 ? buffer.Length : count));
     }
     public bool Input(int kind, int a, int b = 0, int c = 0) =>
         _handle != IntPtr.Zero && Native.zr_input(_handle, kind, a, b, c) != 0;
@@ -120,6 +129,7 @@ internal sealed class RdpConnection : IRdpClipboardConnection
     public Task StopAsync() => _stopping ??= StopCoreAsync();
     private async Task StopCoreAsync()
     {
+        Trace("stop");
         Native.zr_stop(_handle);
         try { await _worker; }
         finally { Native.zr_free(_handle); _handle = IntPtr.Zero; }
@@ -141,6 +151,8 @@ internal sealed class RdpConnection : IRdpClipboardConnection
         internal static extern int zr_file_read(IntPtr session, ulong generation, byte[] target, int capacity);
         [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int zr_clip_sent(IntPtr session);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void zr_clip_diagnostics(IntPtr session, byte[] target, int capacity);
         private const string Library = "zasrdp";
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
         internal static extern IntPtr zr_create([MarshalAs(UnmanagedType.LPUTF8Str)] string host, int port,

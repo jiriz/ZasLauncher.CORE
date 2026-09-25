@@ -26,11 +26,12 @@ static UINT clip_caps(CliprdrClientContext* c, const CLIPRDR_CAPABILITIES* caps)
 static UINT advertise_clip(Session* s) {
     pthread_mutex_lock(&s->mutex);
     BOOL files=s->local_descriptor_size>0;
+    BOOL has_data=files || s->local_clip!=NULL;
     s->advertised_generation=s->local_generation; s->clipboard_ack_error=0;
     pthread_mutex_unlock(&s->mutex);
     CLIPRDR_FORMAT format={ .formatId=files?LOCAL_FILE_FORMAT:13,
         .formatName=files?"FileGroupDescriptorW":NULL };
-    CLIPRDR_FORMAT_LIST list={ .numFormats=1, .formats=&format };
+    CLIPRDR_FORMAT_LIST list={ .numFormats=has_data?1:0, .formats=has_data?&format:NULL };
     return s->clipboard->ClientFormatList(s->clipboard,&list);
 }
 static UINT clip_ready(CliprdrClientContext* c,const CLIPRDR_MONITOR_READY* ready) {
@@ -41,7 +42,9 @@ static UINT clip_ready(CliprdrClientContext* c,const CLIPRDR_MONITOR_READY* read
     CLIPRDR_CAPABILITIES caps={.cCapabilitiesSets=1,.capabilitySets=(CLIPRDR_CAPABILITY_SET*)&general};
     UINT rc=c->ClientCapabilities(c,&caps);
     Session* s=c->custom;
-    pthread_mutex_lock(&s->mutex);s->clip_ready=TRUE;pthread_mutex_unlock(&s->mutex);
+    pthread_mutex_lock(&s->mutex);
+    s->clip_ready=TRUE;s->clip_dirty=TRUE;++s->local_generation;
+    pthread_mutex_unlock(&s->mutex);
     return rc;
 }
 static UINT clip_list(CliprdrClientContext* c,const CLIPRDR_FORMAT_LIST* list) {
@@ -234,4 +237,14 @@ API int zr_clip_sent(Session* s) {
     pthread_mutex_lock(&s->mutex);
     int result=s->clipboard_ack_error?-1:(s->clip_ready && s->local_generation==s->acknowledged_generation && !s->clip_dirty);
     pthread_mutex_unlock(&s->mutex);return result;
+}
+
+API void zr_clip_diagnostics(Session* s,char* target,int capacity) {
+    if (!target || capacity<1) return;
+    pthread_mutex_lock(&s->mutex);
+    snprintf(target,(size_t)capacity,"ready=%d local=%llu sent=%llu ack=%llu error=%d remote=%llu kind=%d request=%d file=%d caps=0x%x",
+        s->clip_ready,(unsigned long long)s->local_generation,(unsigned long long)s->advertised_generation,
+        (unsigned long long)s->acknowledged_generation,s->clipboard_ack_error,(unsigned long long)s->remote_generation,
+        s->remote_kind,s->request_kind,s->file_status,s->server_clip_flags);
+    pthread_mutex_unlock(&s->mutex);
 }

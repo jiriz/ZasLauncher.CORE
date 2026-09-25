@@ -19,13 +19,12 @@ internal sealed class RdpClipboardSync
     private readonly Func<long> _version;
     private readonly bool _enabled, _cleanupCache;
     private CancellationTokenSource? _cancellation;
-    private Task _pending = Task.CompletedTask;
+    private Task<bool> _pending = Task.FromResult(false);
     private long _localVersion = -1, _operationVersion, _failedLocalVersion = -2;
     private string? _localFailure;
     private ulong _remoteGeneration;
     private DateTime _nextPoll;
     private bool _suspended, _stopped;
-    public bool LastSucceeded { get; private set; }
     public static bool Enabled => OperatingSystem.IsMacOS() &&
         !(AppContext.TryGetSwitch("ZasLauncher.DisableClipboardSync", out bool disabled) && disabled);
     public RdpClipboardSync(IRdpClipboardConnection connection, Action<string> status, Func<long>? version = null)
@@ -35,7 +34,7 @@ internal sealed class RdpClipboardSync
         _enabled = version != null || Enabled;
         _cleanupCache = version == null;
     }
-    public void Resume() { _suspended = false; _localVersion = -1; }
+    public void Resume() { _suspended = false; }
     public void Suspend() { _suspended = true; _cancellation?.Cancel(); }
     public async Task StopAsync() { _stopped = true; Suspend(); await _pending; _cancellation?.Dispose(); _cancellation = null; }
     public void Poll(TopLevel top)
@@ -48,35 +47,36 @@ internal sealed class RdpClipboardSync
         }
         if (DateTime.UtcNow < _nextPoll) return;
         _nextPoll = DateTime.UtcNow.AddMilliseconds(150);
-        Start(top, 0);
+        _ = Start(top, 0);
     }
     // direction: automatic, send local, receive remote. The caller supplies the selected tab's TopLevel.
-    public async Task TransferAsync(TopLevel top, int direction)
+    public async Task<bool> TransferAsync(TopLevel top, int direction)
     {
-        if (!_enabled || _stopped) return;
+        if (!_enabled || _stopped) return false;
         while (!_pending.IsCompleted) await _pending;
-        if (!_stopped) await Start(top, direction);
+        return !_stopped && await Start(top, direction);
     }
-    private Task Start(TopLevel top, int direction)
+    private Task<bool> Start(TopLevel top, int direction)
     {
         _cancellation?.Dispose(); _cancellation = new CancellationTokenSource();
-        LastSucceeded = false;
         _operationVersion = _version();
         return _pending = RunAsync(top, direction, _cancellation.Token);
     }
-    private async Task RunAsync(TopLevel top, int direction, CancellationToken cancellation)
+    private async Task<bool> RunAsync(TopLevel top, int direction, CancellationToken cancellation)
     {
         bool sending = false;
         try
         {
-            if (top.Clipboard is not { } clipboard || _connection.State != 2) return;
+            if (top.Clipboard is not { } clipboard || _connection.State != 2) return false;
             bool localChanged = _localVersion != _operationVersion;
-            // Keep receiving after focus leaves Launcher (e.g. switching to Finder to paste).
-            // Read local changes only while Launcher is active, or on explicit paste/transfer.
-            bool send = direction == 1 || (localChanged && (direction == 3 || (direction == 0 && (top is not Window w || w.IsActive))));
+            // Do not overwrite a fresh Windows copy merely because another Mac app (e.g.
+            // Parallels) changed the pasteboard. Advertise local data on Ctrl+V / explicit send.
+            bool send = direction == 1 || (direction == 3 && localChanged);
             if (send)
             {
                 sending = true;
+                _connection.Trace("local-copy begin");
+                ulong previousRemote = _connection.ClipboardOffer().Generation;
                 var items = await clipboard.TryGetFilesAsync();
                 Check(cancellation);
                 var paths = items?.Select(i => i.TryGetLocalPath()).Where(p => p != null).Cast<string>().ToArray();
@@ -86,32 +86,34 @@ internal sealed class RdpClipboardSync
                 {
                     var description = await Task.Run(() => ClipboardFiles.Describe(paths, cancellation), cancellation);
                     Check(cancellation);
+                    _connection.Trace("local-copy files count=" + description.Paths.Length);
                     if (!_connection.SetFiles(description.Descriptors, description.Paths)) throw new IOException("Nelze připravit soubory pro RDP.");
                 }
                 else
                 {
-                    string text = await clipboard.TryGetTextAsync() ?? string.Empty;
+                    string? text = await clipboard.TryGetTextAsync();
+                    if (text == null) throw new IOException("Ve schránce není text ani soubor k vložení.");
                     Check(cancellation);
+                    _connection.Trace("local-copy text");
                     if (!_connection.SetClipboard(text)) throw new IOException("Text schránky překračuje limit 1 MiB.");
                 }
                 await _connection.WaitClipboardReadyAsync(cancellation);
                 Check(cancellation);
                 _localVersion = _operationVersion;
                 _failedLocalVersion = -2; _localFailure = null;
-                LastSucceeded = true;
                 // Ignore an older remote offer after a newer copy on the Mac.
-                _remoteGeneration = _connection.ClipboardOffer().Generation;
-                return;
+                _remoteGeneration = previousRemote;
+                _connection.Trace("local-copy acknowledged");
+                return true;
             }
-            if (direction == 3 && _failedLocalVersion == _operationVersion) { _status(_localFailure!); return; }
-            if (direction == 3) { await _connection.WaitClipboardReadyAsync(cancellation); LastSucceeded = true; return; }
+            if (direction == 3 && _failedLocalVersion == _operationVersion) { _status(_localFailure!); return false; }
+            if (direction == 3) { await _connection.WaitClipboardReadyAsync(cancellation); return true; }
             var offer = _connection.ClipboardOffer();
-            if (offer.Kind == 0 || (offer.Generation == _remoteGeneration && direction != 2)) return;
+            if (offer.Kind == 0 || (offer.Generation == _remoteGeneration && direction != 2)) return false;
             var snapshot = _connection.ClipboardSnapshot();
-            if (snapshot.Kind == 0) return;
+            if (snapshot.Kind == 0) return false;
             _remoteGeneration = snapshot.Generation;
-            // A newer local copy wins over an outstanding response from the RDP host.
-            if (localChanged && _localVersion != -1 && direction != 2) return;
+            _connection.Trace("remote-copy begin kind=" + snapshot.Kind);
             if (snapshot.Kind < 0) throw new IOException("Vzdálenou schránku nelze načíst.");
             if (snapshot.Kind == 1)
             {
@@ -144,17 +146,20 @@ internal sealed class RdpClipboardSync
                 }
                 finally { if (!published && downloaded is { Length: > 0 }) ClipboardFiles.RemoveDownload(downloaded[0]); }
             }
-            LastSucceeded = true;
             _operationVersion = _localVersion = _version();
+            _connection.Trace("remote-copy published");
             _status("Schránka z RDP je připravena na Macu");
+            return true;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { _connection.Trace("clipboard cancelled"); }
         catch (Exception ex)
         {
+            _connection.Trace("clipboard failed type=" + ex.GetType().Name);
             string message = "Schránka: " + ex.Message;
             if (sending) { _failedLocalVersion = _operationVersion; _localFailure = message; }
             _status(message); _localVersion = _operationVersion;
         }
+        return false;
     }
     private void Check(CancellationToken cancellation)
     {

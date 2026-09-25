@@ -6,6 +6,26 @@ using ZasLauncherGUI.Rdp;
 
 internal static class ClipboardContract
 {
+    public static async Task RunWireAsync(TopLevel top,int port)
+    {
+        var peer = new RdpConnection("127.0.0.1",port,"test","",1024,768);
+        long version=1;string status="";
+        var sync=new RdpClipboardSync(peer,s=>status=s,()=>version);
+        try
+        {
+            for(int i=0;i<200 && peer.State!=2;i++) await Task.Delay(20);
+            Require(peer.State==2,"wire connection");
+            await top.Clipboard!.SetTextAsync("LOCAL");
+            Require(await sync.TransferAsync(top,3),"managed/native local send: "+status);
+            for(int i=0;i<200 && await top.Clipboard.TryGetTextAsync()!="WIRE";i++)
+            {
+                await sync.TransferAsync(top,0);await Task.Delay(20);
+            }
+            Require(await top.Clipboard.TryGetTextAsync()=="WIRE","managed/native remote copy: "+status);
+            Console.WriteLine("PASS: clipboard coordinator + native adapter + real RDP peer, both text directions");
+        }
+        finally {await sync.StopAsync();await peer.StopAsync();}
+    }
     public static async Task RunSyncAsync(TopLevel top)
     {
         var clipboard=top.Clipboard!;
@@ -13,8 +33,8 @@ internal static class ClipboardContract
         long version=1;
         var sync=new RdpClipboardSync(peer, _=>{}, ()=>version);
         await clipboard.SetTextAsync("Mac → RDP\nřádek 2");
-        await sync.TransferAsync(top,3);
-        Require(peer.Sent=="Mac → RDP\nřádek 2" && sync.LastSucceeded,"automatic local paste preparation");
+        bool sent=await sync.TransferAsync(top,3);
+        Require(peer.Sent=="Mac → RDP\nřádek 2" && sent,"automatic local paste preparation");
         peer.Remote=(1,1,Encoding.Unicode.GetBytes("Windows → Mac\r\nřádek 2\0"));
         await sync.TransferAsync(top,0);
         Require(await clipboard.TryGetTextAsync()=="Windows → Mac\r\nřádek 2", "remote text");
@@ -27,10 +47,21 @@ internal static class ClipboardContract
         await clipboard.SetTextAsync("new Mac copy");
         await sync.TransferAsync(top,3);
         Require(peer.Sent=="new Mac copy", "fresh local copy");
+        version++;
+        await clipboard.SetTextAsync("Mac copy before ACK");
+        peer.OnAck=()=>peer.Remote=(1,3,Encoding.Unicode.GetBytes("new Windows copy during ACK\0"));
+        Require(await sync.TransferAsync(top,3),"send awaiting ACK");peer.OnAck=null;
+        await sync.TransferAsync(top,0);
+        Require(await clipboard.TryGetTextAsync()=="new Windows copy during ACK", "new remote offer was dropped during ACK");
+        // An older local change/Parallels mirror must not cause us to discard a new Windows copy.
+        version++;await clipboard.SetTextAsync("Mac clipboard mirror");
+        peer.Remote=(1,4,Encoding.Unicode.GetBytes("fresh Windows copy\0"));
+        await sync.TransferAsync(top,0);
+        Require(await clipboard.TryGetTextAsync()=="fresh Windows copy", "remote copy discarded due to older Mac change");
         version++; peer.RejectSend=true;
         await clipboard.SetTextAsync("rejected");
-        await sync.TransferAsync(top,3); Require(!sync.LastSucceeded,"rejected transfer reported success");
-        await sync.TransferAsync(top,3); Require(!sync.LastSucceeded,"retry would paste stale clipboard");
+        Require(!await sync.TransferAsync(top,3),"rejected transfer reported success");
+        Require(!await sync.TransferAsync(top,3),"retry would paste stale clipboard");
         await sync.StopAsync();
         Console.WriteLine("PASS: automatic bidirectional text, multiline Unicode, suspended tab and newer local copy");
     }
@@ -80,12 +111,13 @@ internal static class ClipboardContract
         public int Chunks, Largest;
         public string? Sent;
         public bool RejectSend;
+        public Action? OnAck;
         public (int Kind, ulong Generation, byte[] Data) Remote = (0,0,Array.Empty<byte>());
         public (int Kind, ulong Generation) ClipboardOffer() => (Remote.Kind,Remote.Generation);
         public bool SetClipboard(string text) { if (RejectSend) return false; Sent=text; return true; }
         public bool SetFiles(byte[] descriptors, string[] paths) => true;
         public (int Kind, ulong Generation, byte[] Data) ClipboardSnapshot() => (Remote.Kind,Remote.Generation,(byte[])Remote.Data.Clone());
-        public Task WaitClipboardReadyAsync(CancellationToken cancellation) { cancellation.ThrowIfCancellationRequested(); return Task.CompletedTask; }
+        public Task WaitClipboardReadyAsync(CancellationToken cancellation) { cancellation.ThrowIfCancellationRequested(); OnAck?.Invoke(); return Task.CompletedTask; }
         public async Task<int> ReadFileChunkAsync(ulong generation, uint index, ulong offset, byte[] buffer, int wanted, CancellationToken cancellation)
         {
             Require(generation==7, "generation"); Chunks++; Largest=Math.Max(Largest,wanted);

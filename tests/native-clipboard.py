@@ -54,3 +54,9 @@ try:
         assert buf.raw[:count]==payload
     print('PASS: real RDP clipboard channel, format ACK, text and file bytes in BOTH directions',flush=True)
 finally: close(h,t)
+
+# Optional managed coordinator integration, still using an isolated Headless pasteboard.
+import os, subprocess
+if os.environ.get('RDP_CLIPBOARD_UI'):
+    subprocess.run([os.environ.get('DOTNET',os.path.expanduser('~/.dotnet/dotnet')),os.environ['RDP_CLIPBOARD_UI']],
+        env=dict(os.environ,ZAS_RDP_TEST_PORT=str(port),ZAS_RDP_CLIPBOARD_PEER='1'),check=True,timeout=45)
