@@ -31,6 +31,8 @@ public sealed class RdpSessionControl : UserControl
     private readonly HashSet<int> _keys = new();
     private readonly HashSet<int> _buttons = new();
     private RdpConnection? _connection;
+    private RdpClipboardSync? _clipboardSync;
+    private bool _pastePending, _swallowPasteUp;
     private WriteableBitmap? _bitmap;
     private ulong _serial, _cursorSerial;
     private readonly byte[] _cursorPixels = new byte[256*256*4];
@@ -56,11 +58,12 @@ public sealed class RdpSessionControl : UserControl
         Loaded += async (_, _) =>
         {
             if (_closed) return;
+            _clipboardSync?.Resume();
             _timer.Start();
             if (!_started) { _started = true; await ConnectAsync(); }
         };
         // Avalonia unloads inactive tab content. Keep the protocol worker alive.
-        Unloaded += (_, _) => { _timer.Stop(); ReleaseInputs(); };
+        Unloaded += (_, _) => { _timer.Stop(); _clipboardSync?.Suspend(); ReleaseInputs(); };
         _surface.LostFocus += (_, _) => ReleaseInputs();
         _surface.PointerCaptureLost += (_, _) => ReleaseInputs();
         _surface.AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
@@ -137,6 +140,7 @@ public sealed class RdpSessionControl : UserControl
             _status.Text = "Připojuji…";
             _serial = _cursorSerial = 0; _lastState = -1;
             _connection = new RdpConnection(_host, _port, _username, _password, 1600, 1000);
+            _clipboardSync = new RdpClipboardSync(_connection, text => _status.Text = text);
             _lastSize = default; _inputFailed = false; _surface.Focus();
         }
         catch (DllNotFoundException) { _status.Text = "Chybí knihovna RDP. Použijte kompletní sestavení Launcheru."; }
@@ -152,6 +156,8 @@ public sealed class RdpSessionControl : UserControl
     private async Task DisconnectCoreAsync()
     {
         ReleaseInputs();
+        var sync = _clipboardSync; _clipboardSync = null;
+        if (sync != null) await sync.StopAsync();
         var connection = _connection; _connection = null;
         if (connection != null) { _status.Text = "Odpojuji…"; await connection.StopAsync(); }
         _image.Source = null; _bitmap?.Dispose(); _bitmap = null;
@@ -204,6 +210,7 @@ public sealed class RdpSessionControl : UserControl
         }
         if (state == 2)
         {
+            if (TopLevel.GetTopLevel(this) is { } top) _clipboardSync?.Poll(top);
             var size = _surface.Bounds.Size;
             if (size != _lastSize) { _lastSize = size; _sizeChanged = DateTime.UtcNow; }
             else if (_sizeChanged != DateTime.MaxValue && DateTime.UtcNow - _sizeChanged > TimeSpan.FromMilliseconds(500))
@@ -215,10 +222,31 @@ public sealed class RdpSessionControl : UserControl
             }
         }
     }
-    private void OnKeyDown(object? sender, KeyEventArgs e)
+    private async void OnKeyDown(object? sender, KeyEventArgs e)
     {
         int code = RdpKeyboard.ScanCode(e.PhysicalKey);
         if (code == 0) return;
+        if (code == 0x2f && e.KeyModifiers.HasFlag(KeyModifiers.Control) && RdpClipboardSync.Enabled)
+        {
+            e.Handled = true; _swallowPasteUp = true;
+            if (_pastePending) return;
+            _pastePending = true;
+            var connection = _connection;
+            try
+            {
+                if (_clipboardSync is not { } sync || TopLevel.GetTopLevel(this) is not { } top) return;
+                await sync.TransferAsync(top, 3);
+                if (!sync.LastSucceeded) return;
+                if (connection == _connection && !_closed && IsLoaded && _surface.IsFocused)
+                {
+                    // Ctrl may have been released while files were enumerated.
+                    SendKey(0x1d, true); SendKey(0x2f, true); SendKey(0x2f, false);
+                    if (!_keys.Contains(0x1d)) SendKey(0x1d, false);
+                }
+            }
+            finally { _pastePending = false; }
+            return;
+        }
         if (SendKey(code, true)) _keys.Add(code);
         e.Handled = true;
     }
@@ -226,6 +254,7 @@ public sealed class RdpSessionControl : UserControl
     {
         int code = RdpKeyboard.ScanCode(e.PhysicalKey);
         if (code == 0) return;
+        if (code == 0x2f && _swallowPasteUp) { _swallowPasteUp = false; e.Handled = true; return; }
         SendKey(code, false); _keys.Remove(code); e.Handled = true;
     }
     private bool SendKey(int code, bool down) => SendInput(2, code, down ? 1 : 0, 0);
@@ -266,22 +295,10 @@ public sealed class RdpSessionControl : UserControl
     }
     private async Task SendClipboardAsync(Control header)
     {
-        var c = _connection; var clipboard = TopLevel.GetTopLevel(header)?.Clipboard;
-        if (c == null || c.State != 2 || clipboard == null) return;
-        var text = await clipboard.TryGetTextAsync();
-        if (c != _connection || _closed || text == null) return;
-        _status.Text = c.SetClipboard(text) ? "Schránka připravena v RDP (Ctrl+V)" : "Text schránky je příliš velký.";
-        _surface.Focus();
+        if (_clipboardSync is { } sync && TopLevel.GetTopLevel(header) is { } top) await sync.TransferAsync(top, 1);
     }
     private async Task ReceiveClipboardAsync(Control header)
     {
-        var c = _connection; var clipboard = TopLevel.GetTopLevel(header)?.Clipboard;
-        if (c == null || clipboard == null) return;
-        // Explicit transfer prevents background tabs overwriting the local clipboard.
-        ulong serial = 0;
-        var text = c.GetClipboard(ref serial);
-        if (text == null) { _status.Text = "Ve vzdálené schránce zatím není text. Použijte Ctrl+C."; return; }
-        await clipboard.SetTextAsync(text);
-        if (!_closed) _status.Text = "Text z RDP je v místní schránce";
+        if (_clipboardSync is { } sync && TopLevel.GetTopLevel(header) is { } top) await sync.TransferAsync(top, 2);
     }
 }

@@ -9,6 +9,8 @@ using Avalonia.VisualTree;
 using ZasLauncherGUI.Class;
 using ZasLauncherGUI.Rdp;
 
+AppContext.SetSwitch("ZasLauncher.DisableClipboardSync", true);
+ClipboardContract.Run();
 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
 await using var session = HeadlessUnitTestSession.StartNew(typeof(TestApp));
 await session.Dispatch(async () =>
@@ -23,7 +25,7 @@ await session.Dispatch(async () =>
     var window = new Window { Width = 1200, Height = 800, Content = tabs };
     try
     {
-        window.Show(); tabs.SelectedItem = tabA;
+        window.Show(); await ClipboardContract.RunSyncAsync(window); tabs.SelectedItem = tabA;
         await WaitImage(a);
         tabs.SelectedItem = tabB;
         await WaitImage(b);

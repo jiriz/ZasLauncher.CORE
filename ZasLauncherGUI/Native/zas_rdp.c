@@ -14,6 +14,8 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
 #define API __attribute__((visibility("default")))
 #define QUEUE_SIZE 2048
@@ -39,8 +41,22 @@ struct Session {
     CliprdrClientContext* clipboard;
     BYTE *local_clip, *remote_clip;
     int local_size, remote_size;
-    uint64_t clip_serial;
+    uint64_t clip_serial, local_generation, advertised_generation, acknowledged_generation;
+    int clipboard_ack_error;
     BOOL clip_dirty, clip_ready;
+    BYTE *local_descriptors, *remote_descriptors;
+    int local_descriptor_size, remote_descriptor_size;
+    char** local_paths;
+    int local_path_count;
+    int remote_kind, request_kind;
+    UINT32 remote_format;
+    uint64_t remote_generation, data_generation, request_generation;
+    UINT32 next_stream, file_stream;
+    uint64_t file_generation, file_offset;
+    UINT32 file_index, file_wanted;
+    int file_status, file_size; // -1 pending, -2 failed, 0 idle, 1 queued, 2 ready
+    BYTE* file_buffer;
+    UINT32 server_clip_flags;
 };
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static void init_addins(void) {
@@ -78,70 +94,7 @@ static UINT display_caps(DispClientContext* d, UINT32 n, UINT32 a, UINT32 b) {
     ((Session*)d->custom)->display_ready = TRUE;
     return CHANNEL_RC_OK;
 }
-static UINT clip_caps(CliprdrClientContext* c, const CLIPRDR_CAPABILITIES* caps) {
-    (void)c; (void)caps; return CHANNEL_RC_OK;
-}
-static UINT advertise_clip(Session* s) {
-    CLIPRDR_FORMAT format = { .formatId = 13 }; // CF_UNICODETEXT
-    CLIPRDR_FORMAT_LIST list = { .numFormats = 1, .formats = &format };
-    return s->clipboard->ClientFormatList(s->clipboard, &list);
-}
-static UINT clip_ready(CliprdrClientContext* c, const CLIPRDR_MONITOR_READY* ready) {
-    (void)ready;
-    Session* s = c->custom;
-    CLIPRDR_GENERAL_CAPABILITY_SET general = { .capabilitySetType = CB_CAPSTYPE_GENERAL,
-        .capabilitySetLength = 12, .version = CB_CAPS_VERSION_2, .generalFlags = CB_USE_LONG_FORMAT_NAMES };
-    CLIPRDR_CAPABILITIES caps = { .cCapabilitiesSets = 1,
-        .capabilitySets = (CLIPRDR_CAPABILITY_SET*)&general };
-    UINT rc = c->ClientCapabilities(c, &caps);
-    pthread_mutex_lock(&s->mutex); s->clip_ready = TRUE; pthread_mutex_unlock(&s->mutex);
-    return rc;
-}
-static UINT clip_list(CliprdrClientContext* c, const CLIPRDR_FORMAT_LIST* list) {
-    CLIPRDR_FORMAT_LIST_RESPONSE response = { .common.msgFlags = CB_RESPONSE_OK };
-    UINT rc = c->ClientFormatListResponse(c, &response);
-    if (rc != CHANNEL_RC_OK) return rc;
-    for (UINT32 i = 0; i < list->numFormats; ++i) {
-        if (list->formats[i].formatId == 13) {
-            CLIPRDR_FORMAT_DATA_REQUEST request = { .requestedFormatId = 13 };
-            return c->ClientFormatDataRequest(c, &request);
-        }
-    }
-    // Do not leave a stale text value when the remote clipboard changes to another format.
-    Session* s = c->custom;
-    pthread_mutex_lock(&s->mutex);
-    free(s->remote_clip); s->remote_clip = NULL; s->remote_size = 0; ++s->clip_serial;
-    pthread_mutex_unlock(&s->mutex);
-    return CHANNEL_RC_OK;
-}
-static UINT clip_list_response(CliprdrClientContext* c, const CLIPRDR_FORMAT_LIST_RESPONSE* r) {
-    (void)c; (void)r; return CHANNEL_RC_OK;
-}
-static UINT clip_request(CliprdrClientContext* c, const CLIPRDR_FORMAT_DATA_REQUEST* request) {
-    Session* s = c->custom;
-    pthread_mutex_lock(&s->mutex);
-    CLIPRDR_FORMAT_DATA_RESPONSE r = { .common.msgFlags = CB_RESPONSE_FAIL };
-    if (request->requestedFormatId == 13 && s->local_clip) {
-        r.common.msgFlags = CB_RESPONSE_OK; r.common.dataLen = s->local_size;
-        r.requestedFormatData = s->local_clip;
-    }
-    UINT rc = c->ClientFormatDataResponse(c, &r);
-    pthread_mutex_unlock(&s->mutex);
-    return rc;
-}
-static UINT clip_response(CliprdrClientContext* c, const CLIPRDR_FORMAT_DATA_RESPONSE* r) {
-    Session* s = c->custom;
-    if (!(r->common.msgFlags & CB_RESPONSE_OK) || r->common.dataLen > MAX_CLIP ||
-        (r->common.dataLen & 1) || (!r->requestedFormatData && r->common.dataLen)) return CHANNEL_RC_OK;
-    BYTE* text = calloc(1, (size_t)r->common.dataLen + 2);
-    if (!text) return CHANNEL_RC_NO_MEMORY;
-    if (r->common.dataLen) memcpy(text, r->requestedFormatData, r->common.dataLen);
-    pthread_mutex_lock(&s->mutex);
-    free(s->remote_clip); s->remote_clip = text; s->remote_size = (int)r->common.dataLen + 2;
-    ++s->clip_serial;
-    pthread_mutex_unlock(&s->mutex);
-    return CHANNEL_RC_OK;
-}
+#include "zas_clipboard.inc"
 static void channel_connected(void* context, const ChannelConnectedEventArgs* e) {
     Session* s = session(context);
     if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
@@ -155,6 +108,8 @@ static void channel_connected(void* context, const ChannelConnectedEventArgs* e)
         s->clipboard->ServerFormatListResponse = clip_list_response;
         s->clipboard->ServerFormatDataRequest = clip_request;
         s->clipboard->ServerFormatDataResponse = clip_response;
+        s->clipboard->ServerFileContentsRequest = clip_file_request;
+        s->clipboard->ServerFileContentsResponse = clip_file_response;
     }
 }
 static void channel_disconnected(void* context, const ChannelDisconnectedEventArgs* e) {
@@ -290,10 +245,11 @@ static BOOL drain(Session* s) {
         s->requested_width = 0;
     }
     pthread_mutex_lock(&s->mutex);
-    BOOL notify = s->clip_dirty && s->clip_ready;
+    BOOL notify = s->clip_dirty && s->clip_ready && s->advertised_generation == s->acknowledged_generation;
     if (notify) s->clip_dirty = FALSE;
     pthread_mutex_unlock(&s->mutex);
-    return !notify || !s->clipboard || advertise_clip(s) == CHANNEL_RC_OK;
+    if (notify && s->clipboard && advertise_clip(s) != CHANNEL_RC_OK) return FALSE;
+    return !s->clipboard || clipboard_drain(s);
 }
 API int zr_run(Session* s) {
     if (atomic_load(&s->stop)) { atomic_store(&s->state, 3); return 0; }
@@ -324,6 +280,7 @@ API void zr_free(Session* s) {
     free(s->pixels);
     if (s->local_clip) { memset(s->local_clip, 0, s->local_size); free(s->local_clip); }
     if (s->remote_clip) { memset(s->remote_clip, 0, s->remote_size); free(s->remote_clip); }
+    clipboard_free(s);
     pthread_mutex_destroy(&s->mutex); free(s);
 }
 API int zr_frame(Session* s, void* target, int stride, int capacityWidth, int capacityHeight,
@@ -339,24 +296,6 @@ API int zr_frame(Session* s, void* target, int stride, int capacityWidth, int ca
     }
     pthread_mutex_unlock(&s->mutex); return copied;
 }
-API int zr_set_clip(Session* s, const BYTE* text, int bytes) {
-    if (bytes < 0 || bytes > MAX_CLIP || (bytes & 1)) return 0;
-    BYTE* copy = calloc(1, (size_t)bytes + 2);
-    if (!copy) return 0;
-    if (bytes) memcpy(copy, text, bytes);
-    pthread_mutex_lock(&s->mutex);
-    free(s->local_clip); s->local_clip = copy; s->local_size = bytes + 2; s->clip_dirty = TRUE;
-    pthread_mutex_unlock(&s->mutex); return 1;
-}
-API int zr_get_clip(Session* s, BYTE* target, int capacity, uint64_t* serial) {
-    pthread_mutex_lock(&s->mutex);
-    int count = *serial != s->clip_serial ? s->remote_size : 0;
-    if (target && count <= capacity && count > 0) {
-        memcpy(target, s->remote_clip, count); *serial = s->clip_serial;
-    }
-    pthread_mutex_unlock(&s->mutex); return count;
-}
-
 API int zr_cursor(Session* s, BYTE* target, int capacity, int* width, int* height,
                   int* x, int* y, uint64_t* serial) {
     pthread_mutex_lock(&s->mutex);

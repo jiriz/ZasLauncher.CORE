@@ -9,7 +9,7 @@ using System.Threading;
 namespace ZasLauncherGUI.Rdp;
 
 // Owned by one UI thread. Detach the connection from the UI before StopAsync.
-internal sealed class RdpConnection
+internal sealed class RdpConnection : IRdpClipboardConnection
 {
     static RdpConnection()
     {
@@ -19,7 +19,8 @@ internal sealed class RdpConnection
     private IntPtr _handle;
     private readonly Task<int> _worker;
     private Task? _stopping;
-    public int State => Native.zr_state(_handle);
+    public int State => _handle == IntPtr.Zero ? 3 : Native.zr_state(_handle);
+    public bool IsStopping => _stopping != null;
     public int Error => _worker.IsCompletedSuccessfully ? _worker.Result : 0;
 
     public RdpConnection(string host, int port, string user, string password, int width, int height)
@@ -37,6 +38,7 @@ internal sealed class RdpConnection
         Native.zr_frame(_handle, target, stride, width, height, out actualWidth, out actualHeight, ref serial) != 0;
     public bool SetClipboard(string text)
     {
+        if (text.Length > 512 * 1024) return false;
         var bytes = Encoding.Unicode.GetBytes(text);
         try { return Native.zr_set_clip(_handle, bytes, bytes.Length) != 0; }
         finally { Array.Clear(bytes); }
@@ -55,6 +57,64 @@ internal sealed class RdpConnection
         }
         finally { Array.Clear(bytes); }
     }
+    public (int Kind, ulong Generation) ClipboardOffer()
+    {
+        if (_handle == IntPtr.Zero) return default;
+        Native.zr_clip_info(_handle, out int kind, out ulong generation, null, 0);
+        return (kind, generation);
+    }
+    public (int Kind, ulong Generation, byte[] Data) ClipboardSnapshot()
+    {
+        if (_handle == IntPtr.Zero) return default;
+        int count = Native.zr_clip_info(_handle, out int kind, out ulong generation, null, 0);
+        if (count <= 0 || count > 4 + 4096 * 592) return (kind, generation, Array.Empty<byte>());
+        var data = new byte[count];
+        int read = Native.zr_clip_info(_handle, out int actualKind, out ulong actualGeneration, data, count);
+        return read == count && kind == actualKind && generation == actualGeneration
+            ? (kind, generation, data) : (0, actualGeneration, Array.Empty<byte>());
+    }
+    public bool SetFiles(byte[] descriptors, string[] paths)
+    {
+        var pointers = new IntPtr[paths.Length];
+        try
+        {
+            for (int i=0;i<paths.Length;i++) pointers[i] = Marshal.StringToCoTaskMemUTF8(paths[i]);
+            return Native.zr_set_files(_handle, descriptors, descriptors.Length, pointers, pointers.Length) != 0;
+        }
+        finally { foreach (var pointer in pointers) if (pointer != IntPtr.Zero) Marshal.FreeCoTaskMem(pointer); }
+    }
+    public async Task<int> ReadFileChunkAsync(ulong generation, uint index, ulong offset, byte[] buffer, int wanted, CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();
+        if (IsStopping || Native.zr_file_start(_handle, generation, index, offset, (uint)wanted) == 0)
+            throw new IOException("Obsah vzdálené schránky se změnil nebo přenos již není dostupný.");
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        try { while (true)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (IsStopping) throw new OperationCanceledException();
+            int count = Native.zr_file_read(_handle, generation, buffer, buffer.Length);
+            if (count >= 0) return count;
+            if (count == -2) throw new IOException("Přenos souboru byl přerušen nebo se změnila schránka.");
+            if (DateTime.UtcNow > deadline) throw new IOException("Vzdálený počítač neodpovídá na přenos souboru.");
+            await Task.Delay(20, cancellation);
+        } }
+        finally { if (!IsStopping) Native.zr_file_cancel(_handle); }
+    }
+    public async Task WaitClipboardReadyAsync(CancellationToken cancellation)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!IsStopping && State == 2)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            int ready = Native.zr_clip_sent(_handle);
+            if (ready == 1) return;
+            if (ready < 0) throw new IOException("Vzdálený počítač odmítl přenos schránky.");
+            if (DateTime.UtcNow > deadline) throw new IOException("Vzdálený počítač nepotvrdil přenos schránky. Ověřte povolení schránky na serveru.");
+            await Task.Delay(20, cancellation);
+        }
+        throw new OperationCanceledException();
+    }
     public bool Cursor(byte[] pixels, out int width, out int height, out int x, out int y, ref ulong serial) =>
         Native.zr_cursor(_handle, pixels, pixels.Length, out width, out height, out x, out y, ref serial) != 0;
     public Task StopAsync() => _stopping ??= StopCoreAsync();
@@ -69,6 +129,18 @@ internal sealed class RdpConnection
         [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int zr_cursor(IntPtr session, byte[] pixels, int capacity, out int width, out int height,
             out int x, out int y, ref ulong serial);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int zr_set_files(IntPtr session, byte[] descriptors, int size, IntPtr[] paths, int count);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int zr_clip_info(IntPtr session, out int kind, out ulong generation, byte[]? target, int capacity);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int zr_file_start(IntPtr session, ulong generation, uint index, ulong offset, uint size);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void zr_file_cancel(IntPtr session);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int zr_file_read(IntPtr session, ulong generation, byte[] target, int capacity);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int zr_clip_sent(IntPtr session);
         private const string Library = "zasrdp";
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
         internal static extern IntPtr zr_create([MarshalAs(UnmanagedType.LPUTF8Str)] string host, int port,
