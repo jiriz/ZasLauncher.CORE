@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using System;
 using System.Collections.Generic;
-using System.Management;
 using System.Threading.Tasks;
 using System.Xml;
 using Avalonia.Controls;
@@ -170,7 +169,7 @@ public partial class App : Application
 
                 await box.ShowAsync();
             }
-            catch (ManagementException ex)
+            catch (Exception ex)
             {
                 var box = MessageBoxManager.GetMessageBoxStandard(
                     "PIN pro docházkový terminál",

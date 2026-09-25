@@ -188,6 +188,8 @@ if [[ "$DO_MAC" == "true" ]]; then
     <string>$(basename "$ICON_SRC")</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

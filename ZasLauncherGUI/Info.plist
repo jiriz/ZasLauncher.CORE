@@ -15,6 +15,12 @@
         <key>CFBundleExecutable</key>
         <string>ZasLauncherGUI</string>
 
+        <key>CFBundlePackageType</key>
+        <string>APPL</string>
+
+        <key>NSPrincipalClass</key>
+        <string>NSApplication</string>
+
         <key>LSUIElement</key>
         <true/>
     </dict>

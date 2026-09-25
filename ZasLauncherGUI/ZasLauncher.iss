@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "ZasLauncher"
-#define MyAppVersion "1.0.0.13"
+#define MyAppVersion "1.0.0.15"
 #define MyAppPublisher "ZAS Group s.r.o."
 #define MyAppURL "https://www.zasgroup.cz"
 #define MyAppExeName "ZasLauncher.exe"
