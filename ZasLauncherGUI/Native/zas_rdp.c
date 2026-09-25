@@ -123,6 +123,11 @@ static void channel_disconnected(void* context, const ChannelDisconnectedEventAr
 static BOOL pre_connect(freerdp* i) {
     if (PubSub_SubscribeChannelConnected(i->context->pubSub, channel_connected) < 0) return FALSE;
     if (PubSub_SubscribeChannelDisconnected(i->context->pubSub, channel_disconnected) < 0) return FALSE;
+    return TRUE;
+}
+static BOOL load_channels(freerdp* i) {
+    // FreeRDP rebuilds context->channels after PreConnect, then calls LoadChannels.
+    // Loading addins in PreConnect silently loses cliprdr and drdynvc on that rebuild.
     return freerdp_client_load_addins(i->context->channels, i->context->settings);
 }
 static BOOL pointer_new(rdpContext* c, rdpPointer* p) { (void)c; (void)p; return TRUE; }
@@ -175,6 +180,7 @@ API Session* zr_create(const char* host, int port, const char* user, const char*
     if (!s->instance) goto fail;
     s->instance->ContextSize = sizeof(Context);
     s->instance->PreConnect = pre_connect;
+    s->instance->LoadChannels = load_channels;
     s->instance->PostConnect = post_connect;
     s->instance->PostDisconnect = post_disconnect;
     if (!freerdp_context_new(s->instance)) goto fail;

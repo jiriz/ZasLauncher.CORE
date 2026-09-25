@@ -1,4 +1,4 @@
-# RDP v záložkách — ZasLauncher 1.0.0.18
+# RDP v záložkách — ZasLauncher 1.0.0.19
 
 Změna: Jarka (Codex), 25. 9. 2026.
 
@@ -145,3 +145,40 @@ Zůstávají existující build varování v připojené ZASutility.Standard a p
 Testovací aplikace pro Apple Silicon:
 `/Users/jiriz/ZasLauncher-builds/1.0.0.18/ZasLauncher.app`
 Má lokální ad-hoc podpis; nenahrazuje instalaci v /Applications a není notarizovaná.
+
+## Oprava skutečného připojení schránky 1.0.0.19
+
+Jarka (Codex), 25. 9. 2026. Jiří ověřil, že ve verzi 1.0.0.18 nefunguje
+text ani soubory. Ve spuštěném Launcheru byla ověřena hláška o nepotvrzeném
+přenosu schránky.
+
+Příčina: adaptér volal `freerdp_client_load_addins` v `PreConnect`. FreeRDP 3.26.0
+potom v `utils_reload_channels` původní kanály zruší a vyžádá si nové přes
+`instance->LoadChannels`. Tento callback chyběl. Připojení plochy fungovalo,
+ale server vůbec neměl připojený kanál `cliprdr`; týkalo se to i ostatních kanálů.
+Nešlo o důkaz zákazu schránky na serveru.
+
+Oprava: `PreConnect` pouze registruje události, načítání addinů je v samostatném
+`LoadChannels` callbacku. Oprava je v nativní `rdp/libzasrdp.dylib`, proto je potřeba
+celá nová aplikace, ne pouze managed DLL. Stávající RDP relace musí být znovu otevřena
+v nové aplikaci; běžící verze 1.0.0.18 si knihovnu sama nevymění.
+
+Ověření:
+
+- Před opravou místní server hlásil `clipboard joined=0`; inicializace clipboard
+  serveru selhala. Po opravě `clipboard joined=1` a potvrzení přenosu prošlo.
+- Nový wire test používá skutečné vyjednané RDP spojení a `CliprdrServerContext`
+  nad oficiálním FreeRDP sample serverem. Ověří oba směry textu i bajtů souboru,
+  včetně nabídky formátů, ACK, požadavků na data a přenosu FileContents.
+  Server nabídne vlastní data až po ověření dat přijatých od klienta.
+- Test pracuje pouze přes lokální Unix socket a proxy 127.0.0.1, se syntetickými
+  daty. Nemění macOS schránku a nepřipojuje se k zákaznické relaci.
+- Opakování: po běžném buildu spustit
+  `FREERDP_SOURCE=/cesta/k/FreeRDP-3.26.0 bash tests/run-clipboard-wire.sh`.
+  Zdroj musí být checkout oficiálního FreeRDP tagu 3.26.0; skript ho nestahuje.
+- Běžné testy `tests/run-macos.sh` prošly. Wire test prošel také přímo s knihovnou
+  z finální aplikace 1.0.0.19. macOS arm64 publish a kontrola podpisu prošly.
+
+Lokální testovací aplikace (Apple Silicon, ad-hoc podpis):
+`/Users/jiriz/ZasLauncher-builds/1.0.0.19/ZasLauncher.app`.
+Skutečné vložení v zákaznickém Průzkumníku a Finderu zatím zůstává pro ověření Jiřím.
