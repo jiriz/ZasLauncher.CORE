@@ -29,7 +29,14 @@ public partial class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            desktop.ShutdownRequested += async (_, e) =>
+            {
+                e.Cancel = true;
+                await Exit();
+            };
+        }
 
         _ = CreateTrayIconAsync();
 
@@ -309,12 +316,14 @@ public partial class App : Application
         return item;
     }
 
-    private Task Exit()
+    private bool _exiting;
+    private async Task Exit()
     {
+        if (_exiting) return;
+        _exiting = true;
+        if (_rdpWindow != null) await _rdpWindow.CloseSessionsAsync();
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             desktop.Shutdown();
-
-        return Task.CompletedTask;
     }
 
     private async Task MyNativeMenuItemClick(string name, string path, bool isOnlyShiftPressed)
@@ -424,6 +433,7 @@ public partial class App : Application
     
     private void OpenRdpTab(string name, string host, int port, string username, string password)
     {
+        if (_exiting) return;
         if (_rdpWindow == null)
         {
             MacDockIcon.SetVisible(true);

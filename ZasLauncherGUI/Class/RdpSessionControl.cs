@@ -1,530 +1,276 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Runtime.Versioning;
-using System.Security.Cryptography;
-using System.Text;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
-using ZasLauncherGUI.Utility;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
+using Avalonia.Threading;
+using ZasLauncherGUI.Rdp;
 
 namespace ZasLauncherGUI.Class;
 
-/// <summary>
-/// Spouští RDP session pomocí sdl-freerdp (SDL/Metal, bez XQuartz).
-/// </summary>
-[SupportedOSPlatform("macos")]
-public class RdpSessionControl : UserControl
+/// <summary>One independent FreeRDP session, rendered inside an Avalonia tab.</summary>
+public sealed class RdpSessionControl : UserControl
 {
-    // sdl-freerdp creates a high-DPI SDL window on macOS. These pixel dimensions
-    // produce a large but still screen-fitting logical window on Retina displays.
-    private const int InitialWidth = 3200;
-    private const int InitialHeight = 1900;
-    private const int RemoteScalePercent = 180;
-
-    private readonly string _host;
+    private readonly string _host, _username;
+    private string _password;
     private readonly int _port;
-    private readonly string _username;
-    private readonly string _password;
-    private readonly string _windowTitle;
-    private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
-
-    private Process? _rdpProcess;
-    private string? _appPath;
-    private string? _appExecutablePath;
-    private string? _processDisplayName;
-    private TextBlock? _statusText;
-    private bool _hasAutoConnected;
-    private bool _isDisconnecting;
+    private readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly Image _image = new() { Stretch = Stretch.Uniform };
+    private readonly Border _surface;
+    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(33) };
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private readonly HashSet<int> _keys = new();
+    private readonly HashSet<int> _buttons = new();
+    private RdpConnection? _connection;
+    private WriteableBitmap? _bitmap;
+    private ulong _serial, _cursorSerial;
+    private readonly byte[] _cursorPixels = new byte[256*256*4];
+    private Cursor? _cursor;
+    private bool _started, _closed;
+    private Task? _closeTask;
+    private bool _inputFailed;
+    private int _mouseX, _mouseY, _lastState = -1;
+    private Size _lastSize;
+    private DateTime _sizeChanged;
 
     public RdpSessionControl(string host, int port, string username, string password, string windowTitle)
     {
-        _host = host;
-        _port = RdpEndpoint.NormalizePort(port);
-        _username = username;
-        _password = password;
-        _windowTitle = windowTitle;
-        BuildUI();
-        Loaded += (_, _) =>
+        _host = host; _port = port; _username = username; _password = password;
+        _surface = new Border { Background = Brushes.Black, Child = _image, Focusable = true,
+            ClipToBounds = true, HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch };
+        var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8) };
+        toolbar.Children.Add(Button("Připojit znovu", ConnectAsync));
+        toolbar.Children.Add(Button("Odpojit", DisconnectAsync));
+        toolbar.Children.Add(Button("Ctrl+Alt+Del", () =>
         {
-            if (_hasAutoConnected)
-                return;
-
-            _hasAutoConnected = true;
-            Connect();
+            SendKey(0x1d, true); SendKey(0x38, true); SendKey(0x153, true);
+            SendKey(0x153, false); SendKey(0x38, false); SendKey(0x1d, false);
+            _surface.Focus(); return Task.CompletedTask;
+        }));
+        toolbar.Children.Add(Button("Schránka → RDP", SendClipboardAsync));
+        toolbar.Children.Add(Button("RDP → schránka", ReceiveClipboardAsync));
+        toolbar.Children.Add(_status);
+        var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        grid.Children.Add(toolbar); Grid.SetRow(_surface, 1); grid.Children.Add(_surface); Content = grid;
+        _timer.Tick += (_, _) => Refresh();
+        Loaded += async (_, _) =>
+        {
+            if (_closed) return;
+            _timer.Start();
+            if (!_started) { _started = true; await ConnectAsync(); }
+        };
+        // Avalonia unloads inactive tab content. Keep the protocol worker alive.
+        Unloaded += (_, _) => { _timer.Stop(); ReleaseInputs(); };
+        _surface.LostFocus += (_, _) => ReleaseInputs();
+        _surface.PointerCaptureLost += (_, _) => ReleaseInputs();
+        _surface.AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
+        _surface.AddHandler(KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel);
+        _surface.PointerMoved += (_, e) => { if (Locate(e.GetPosition(_surface))) SendMouse(0x0800); };
+        _surface.PointerPressed += (_, e) =>
+        {
+            if (!Locate(e.GetPosition(_surface))) return;
+            _surface.Focus(); e.Pointer.Capture(_surface);
+            var kind = e.GetCurrentPoint(_surface).Properties.PointerUpdateKind;
+            int button = kind switch { PointerUpdateKind.LeftButtonPressed => 0x1000,
+                PointerUpdateKind.RightButtonPressed => 0x2000, PointerUpdateKind.MiddleButtonPressed => 0x4000, _ => 0 };
+            if (button != 0 && SendMouse(button | 0x8000)) _buttons.Add(button);
+            e.Handled = true;
+        };
+        _surface.PointerReleased += (_, e) =>
+        {
+            Locate(e.GetPosition(_surface), clamp: true);
+            var kind = e.GetCurrentPoint(_surface).Properties.PointerUpdateKind;
+            int button = kind switch { PointerUpdateKind.LeftButtonReleased => 0x1000,
+                PointerUpdateKind.RightButtonReleased => 0x2000, PointerUpdateKind.MiddleButtonReleased => 0x4000, _ => 0 };
+            if (button != 0) { SendMouse(button); _buttons.Remove(button); }
+            if (_buttons.Count == 0) e.Pointer.Capture(null);
+            e.Handled = true;
+        };
+        _surface.PointerWheelChanged += (_, e) =>
+        {
+            if (!Locate(e.GetPosition(_surface))) return;
+            int delta = Math.Clamp((int)(e.Delta.Y * 120), -255, 255);
+            if (delta != 0) SendMouse(0x0200 | (delta < 0 ? 0x0100 : 0) | (delta & 0x1ff));
+            e.Handled = true;
         };
     }
-
-    private void BuildUI()
+    private Button Button(string text, Func<Task> action)
     {
-        var connectBtn = new Button
+        var b = new Button { Content = text };
+        b.Click += async (_, _) =>
         {
-            Content = "Připojit znovu",
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 12, 0, 0)
+            b.IsEnabled = false;
+            try { await action(); }
+            catch (Exception ex) { _status.Text = "RDP: " + ex.Message; }
+            finally { b.IsEnabled = !_closed; }
         };
-        connectBtn.Click += (_, _) => Connect();
-
-        var disconnectBtn = new Button
+        return b;
+    }
+    private async Task ConnectAsync()
+    {
+        await _lifecycle.WaitAsync();
+        try
         {
-            Content = "Odpojit",
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 6, 0, 0)
-        };
-        disconnectBtn.Click += (_, _) => Disconnect();
-
-        var bringToFrontBtn = new Button
+            await DisconnectCoreAsync();
+            if (_closed) return;
+            _status.Text = "Připojuji…";
+            _serial = _cursorSerial = 0; _lastState = -1;
+            _connection = new RdpConnection(_host, _port, _username, _password, 1600, 1000);
+            _lastSize = default; _inputFailed = false; _surface.Focus();
+        }
+        catch (DllNotFoundException) { _status.Text = "Chybí knihovna RDP. Použijte kompletní sestavení Launcheru."; }
+        catch (Exception ex) { _status.Text = "Připojení selhalo: " + ex.Message; }
+        finally { _lifecycle.Release(); }
+    }
+    private async Task DisconnectAsync()
+    {
+        await _lifecycle.WaitAsync();
+        try { await DisconnectCoreAsync(); }
+        finally { _lifecycle.Release(); }
+    }
+    private async Task DisconnectCoreAsync()
+    {
+        ReleaseInputs();
+        var connection = _connection; _connection = null;
+        if (connection != null) { _status.Text = "Odpojuji…"; await connection.StopAsync(); }
+        _image.Source = null; _bitmap?.Dispose(); _bitmap = null;
+        _surface.Cursor = null; _cursor?.Dispose(); _cursor = null;
+        _status.Text = "Odpojeno";
+    }
+    public Task CloseAsync() => _closeTask ??= CloseCoreAsync();
+    private async Task CloseCoreAsync()
+    {
+        _closed = true; _timer.Stop();
+        await DisconnectAsync();
+        _password = string.Empty;
+    }
+    private void Refresh()
+    {
+        var c = _connection;
+        if (c == null || _closed) return;
+        int state = c.State;
+        if (state != _lastState || state == 4)
         {
-            Content = "Přenést dopředu",
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 6, 0, 0)
-        };
-        bringToFrontBtn.Click += (_, _) => BringToFront();
-
-        _statusText = new TextBlock
+            _status.Text = state switch { 0 or 1 => "Připojuji…", 2 => "Připojeno",
+                3 => "Odpojeno", _ => $"Připojení selhalo (0x{c.Error:X8})." };
+            _lastState = state;
+        }
+        ulong ignored = 0;
+        c.Frame(IntPtr.Zero, 0, 0, 0, out int width, out int height, ref ignored);
+        if (width > 0 && height > 0)
         {
-            Text = "Spouštím připojení…",
-            HorizontalAlignment = HorizontalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 8, 0, 0)
-        };
-
-        Content = new StackPanel
-        {
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Spacing = 4,
-            Children =
+            if (_bitmap == null || _bitmap.PixelSize != new PixelSize(width, height))
             {
-                new TextBlock
-                {
-                    Text = $"Host: {RdpEndpoint.Format(_host, _port)}",
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    FontWeight = FontWeight.Bold
-                },
-                new TextBlock
-                {
-                    Text = $"Uživatel: {_username}",
-                    HorizontalAlignment = HorizontalAlignment.Center
-                },
-                _statusText,
-                connectBtn,
-                disconnectBtn,
-                bringToFrontBtn
+                _image.Source = null; _bitmap?.Dispose();
+                _bitmap = new WriteableBitmap(new PixelSize(width, height), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
+                _image.Source = _bitmap; _serial = 0;
             }
-        };
-    }
-
-    private void Connect()
-    {
-        if (_rdpProcess is { HasExited: false })
-        {
-            Disconnect();
+            using var buffer = _bitmap.Lock();
+            if (c.Frame(buffer.Address, buffer.RowBytes, width, height, out _, out _, ref _serial)) _image.InvalidateVisual();
         }
-
-        _isDisconnecting = false;
-
-        string sdlBin;
-        try
+        if (c.Cursor(_cursorPixels, out int cw, out int ch, out int cx, out int cy, ref _cursorSerial))
         {
-            sdlBin = FindSdlFreeRdp();
-        }
-        catch (Exception ex)
-        {
-            SetStatus($"❌ {ex.Message}");
-            return;
-        }
-
-        SetStatus($"Připojuji se k {RdpEndpoint.Format(_host, _port)}…");
-
-        var processDisplayName = GetProcessDisplayName(_windowTitle);
-        var appBundle = GetConnectionAppBundle(sdlBin, processDisplayName, _instanceId);
-        _processDisplayName = appBundle.ProcessName;
-        _appPath = appBundle.AppPath;
-        _appExecutablePath = appBundle.ExecutablePath;
-
-        var psi = CreateRdpProcessStartInfo(appBundle, appBundle.ProcessName);
-        psi.Environment["SDL_APP_NAME"] = appBundle.ProcessName;
-
-        psi.ArgumentList.Add($"/v:{_host}");
-
-        if (_port != RdpEndpoint.DefaultPort)
-            psi.ArgumentList.Add($"/port:{_port}");
-
-        psi.ArgumentList.Add($"/u:{_username}");
-        psi.ArgumentList.Add($"/p:{_password}");
-        psi.ArgumentList.Add("/cert:ignore");
-        psi.ArgumentList.Add($"/t:{_windowTitle}");
-        psi.ArgumentList.Add($"/w:{InitialWidth}");
-        psi.ArgumentList.Add($"/h:{InitialHeight}");
-
-        if (TryGetCenteredWindowPosition() is { } windowPosition)
-            psi.ArgumentList.Add(windowPosition);
-
-        psi.ArgumentList.Add("+dynamic-resolution");
-        psi.ArgumentList.Add($"/scale:{RemoteScalePercent}");
-        // psi.ArgumentList.Add($"/scale-desktop:{RemoteScalePercent}");
-        // psi.ArgumentList.Add($"/scale-device:{RemoteScalePercent}");
-        psi.ArgumentList.Add($"/wm-class:{MakeWindowClass(_processDisplayName)}");
-
-        _rdpProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
-
-        _rdpProcess.Exited += (_, _) =>
-        {
-            if (_isDisconnecting)
-                return;
-
-            var code = _rdpProcess?.ExitCode ?? -1;
-            Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-                SetStatus(code == 0 ? "✅ Odpojeno." : $"❌ Chyba (kód {code}). Klikněte pro opakování."));
-        };
-
-        _rdpProcess.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data != null)
-                Console.WriteLine($"[sdl-freerdp] {e.Data}");
-        };
-
-        try
-        {
-            _rdpProcess.Start();
-            _rdpProcess.BeginErrorReadLine();
-            SetStatus($"✅ RDP okno spuštěno (PID {_rdpProcess.Id})");
-        }
-        catch (Exception ex)
-        {
-            SetStatus($"❌ Nepodařilo se spustit: {ex.Message}");
-        }
-    }
-
-    private void SetStatus(string text)
-    {
-        Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            if (_statusText != null)
-                _statusText.Text = text;
-        });
-    }
-
-    public void Disconnect()
-    {
-        try
-        {
-            _isDisconnecting = true;
-
-            if (!string.IsNullOrWhiteSpace(_appExecutablePath) ||
-                !string.IsNullOrWhiteSpace(_appPath) ||
-                !string.IsNullOrWhiteSpace(_processDisplayName))
+            Cursor next;
+            if (cw > 0)
             {
-                KillConnectionApp(_appExecutablePath, _appPath, _processDisplayName);
+                using var cursorImage = new WriteableBitmap(new PixelSize(cw, ch), new Vector(96,96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
+                using (var pixels = cursorImage.Lock())
+                    for (int y = 0; y < ch; y++) Marshal.Copy(_cursorPixels, y*cw*4, pixels.Address + y*pixels.RowBytes, cw*4);
+                next = new Cursor(cursorImage, new PixelPoint(Math.Clamp(cx,0,cw-1),Math.Clamp(cy,0,ch-1)));
             }
-
-            if (_rdpProcess is { HasExited: false })
-                _rdpProcess.Kill(entireProcessTree: true);
-
-            _rdpProcess = null;
-            SetStatus("✅ Odpojeno.");
+            else next = new Cursor(cw < 0 ? StandardCursorType.None : StandardCursorType.Arrow);
+            _surface.Cursor = next; _cursor?.Dispose(); _cursor = next;
         }
-        catch (Exception ex)
+        if (state == 2)
         {
-            SetStatus($"❌ Nepodařilo se odpojit: {ex.Message}");
-        }
-    }
-
-    public void BringToFront()
-    {
-        try
-        {
-            if (!OperatingSystem.IsMacOS())
-                return;
-
-            if (!string.IsNullOrWhiteSpace(_processDisplayName))
+            var size = _surface.Bounds.Size;
+            if (size != _lastSize) { _lastSize = size; _sizeChanged = DateTime.UtcNow; }
+            else if (_sizeChanged != DateTime.MaxValue && DateTime.UtcNow - _sizeChanged > TimeSpan.FromMilliseconds(500))
             {
-                using var activateProcess = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "/usr/bin/osascript",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    ArgumentList =
-                    {
-                        "-e",
-                        $"tell application \"{EscapeAppleScriptString(_processDisplayName)}\" to activate"
-                    }
-                });
-
-                if (activateProcess != null && activateProcess.WaitForExit(1000) && activateProcess.ExitCode == 0)
-                    return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(_appPath))
-            {
-                using var openProcess = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "/usr/bin/open",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    ArgumentList =
-                    {
-                        _appPath
-                    }
-                });
-                openProcess?.WaitForExit(1000);
+                // Logical pixels keep text readable on Retina. The renderer scales to physical pixels.
+                int w = Math.Clamp((int)size.Width, 200, 4096) & ~1;
+                int h = Math.Clamp((int)size.Height, 200, 4096);
+                if (c.Input(4, w, h)) _sizeChanged = DateTime.MaxValue;
             }
         }
-        catch (Exception ex)
-        {
-            SetStatus($"❌ Nepodařilo se přenést dopředu: {ex.Message}");
-        }
     }
-
-    private static string FindSdlFreeRdp()
+    private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        string[] candidates =
-        [
-            "/opt/homebrew/bin/sdl-freerdp",
-            "/opt/homebrew/bin/sdl-freerdp3",
-            "/usr/local/bin/sdl-freerdp",
-            "/usr/local/bin/sdl-freerdp3",
-        ];
-
-        foreach (var path in candidates)
-        {
-            if (File.Exists(path))
-                return path;
-        }
-
-        throw new InvalidOperationException(
-            "sdl-freerdp nebylo nalezeno.\nNainstalujte: brew install freerdp");
+        int code = RdpKeyboard.ScanCode(e.PhysicalKey);
+        if (code == 0) return;
+        if (SendKey(code, true)) _keys.Add(code);
+        e.Handled = true;
     }
-
-    private static string GetProcessDisplayName(string title) =>
-        string.IsNullOrWhiteSpace(title) ? "RDP" : title.Trim();
-
-    private string? TryGetCenteredWindowPosition()
+    private void OnKeyUp(object? sender, KeyEventArgs e)
     {
-        var screens = TopLevel.GetTopLevel(this)?.Screens;
-        var screen = screens?.ScreenFromVisual(this) ?? screens?.Primary;
-        if (screen is null)
-            return null;
-
-        var workingArea = screen.WorkingArea;
-        var x = workingArea.X + Math.Max(0, (workingArea.Width - InitialWidth) / 2);
-        var y = workingArea.Y + Math.Max(0, (workingArea.Height - InitialHeight) / 2);
-        return $"/window-position:{x}x{y}";
+        int code = RdpKeyboard.ScanCode(e.PhysicalKey);
+        if (code == 0) return;
+        SendKey(code, false); _keys.Remove(code); e.Handled = true;
     }
-
-    private static ConnectionAppBundle GetConnectionAppBundle(string sdlBin, string displayName, string instanceId)
+    private bool SendKey(int code, bool down) => SendInput(2, code, down ? 1 : 0, 0);
+    private bool SendMouse(int flags) => SendInput(1, flags, _mouseX, _mouseY);
+    private bool SendInput(int kind, int a, int b, int c)
     {
-        try
-        {
-            var appsDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "ZasLauncher",
-                "rdp-apps");
-
-            var appName = MakeSafeFileName($"{displayName}-{instanceId}");
-            var appDir = Path.Combine(appsDir, $"{appName}.app");
-            var contentsDir = Path.Combine(appDir, "Contents");
-            var macOsDir = Path.Combine(contentsDir, "MacOS");
-            Directory.CreateDirectory(macOsDir);
-
-            var executablePath = Path.Combine(macOsDir, appName);
-            if (!File.Exists(executablePath))
-                File.CreateSymbolicLink(executablePath, sdlBin);
-
-            File.WriteAllText(Path.Combine(contentsDir, "Info.plist"), CreateInfoPlist(appName, appName));
-            return new ConnectionAppBundle(appDir, executablePath, appName);
-        }
-        catch
-        {
-            return new ConnectionAppBundle(
-                sdlBin,
-                sdlBin,
-                Path.GetFileNameWithoutExtension(sdlBin),
-                false);
-        }
+        var connection = _connection;
+        if (connection == null) return false;
+        if (connection.Input(kind, a, b, c)) return true;
+        // Never drop a key-up silently. Abort the session if its bounded queue cannot keep up.
+        if (connection.State == 2 && !_inputFailed) { _inputFailed = true; _ = DisconnectAsync(); }
+        return false;
     }
-
-    private static ProcessStartInfo CreateRdpProcessStartInfo(ConnectionAppBundle appBundle, string processDisplayName)
+    private void ReleaseInputs()
     {
-        var psi = new ProcessStartInfo
+        // Direct enqueue avoids recursively starting DisconnectAsync on overflow.
+        bool ok = true;
+        foreach (int key in _keys) if (_connection != null) ok &= _connection.Input(2, key, 0);
+        foreach (int button in _buttons) if (_connection != null) ok &= _connection.Input(1, button, _mouseX, _mouseY);
+        _keys.Clear(); _buttons.Clear();
+        if (!ok && !_inputFailed && _connection?.State == 2)
         {
-            FileName = appBundle.UseLaunchServices ? "/usr/bin/open" : appBundle.ExecutablePath,
-            UseShellExecute = false,
-            RedirectStandardError = true,
-        };
-
-        if (appBundle.UseLaunchServices)
-        {
-            psi.ArgumentList.Add("-n");
-            psi.ArgumentList.Add("-W");
-            psi.ArgumentList.Add("--env");
-            psi.ArgumentList.Add($"SDL_APP_NAME={processDisplayName}");
-            psi.ArgumentList.Add(appBundle.AppPath);
-            psi.ArgumentList.Add("--args");
+            _inputFailed = true;
+            Dispatcher.UIThread.Post(async () => await DisconnectAsync());
         }
-
-        return psi;
     }
-
-    private static void KillConnectionApp(string? executablePath, string? appPath, string? processName)
+    private bool Locate(Point p, bool clamp = false)
     {
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(processName))
-            {
-                RunAndWait("/usr/bin/osascript", new[]
-                {
-                    "-e",
-                    $"tell application \"{EscapeAppleScriptString(processName)}\" to quit"
-                });
-
-                RunAndWait("/usr/bin/killall", new[] { processName });
-
-                RunAndWait("/usr/bin/pkill", new[]
-                {
-                    "-x",
-                    processName
-                });
-            }
-
-            var patterns = new List<string>();
-
-            if (!string.IsNullOrWhiteSpace(executablePath))
-                patterns.Add(executablePath);
-
-            if (!string.IsNullOrWhiteSpace(appPath))
-                patterns.Add(appPath);
-
-            if (!string.IsNullOrWhiteSpace(processName))
-                patterns.Add(processName);
-
-            foreach (var pattern in patterns.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct())
-            {
-                RunAndWait("/usr/bin/pkill", new[]
-                {
-                    "-f",
-                    pattern
-                });
-            }
-        }
-        catch
-        {
-            // Best effort only.
-        }
+        if (_bitmap == null) return false;
+        var bounds = _surface.Bounds.Size; var pixels = _bitmap.PixelSize;
+        double scale = Math.Min(bounds.Width / pixels.Width, bounds.Height / pixels.Height);
+        if (scale <= 0) return false;
+        double x = (p.X - (bounds.Width - pixels.Width * scale) / 2) / scale;
+        double y = (p.Y - (bounds.Height - pixels.Height * scale) / 2) / scale;
+        if (!clamp && (x < 0 || y < 0 || x >= pixels.Width || y >= pixels.Height)) return false;
+        _mouseX = Math.Clamp((int)x, 0, pixels.Width - 1); _mouseY = Math.Clamp((int)y, 0, pixels.Height - 1);
+        return true;
     }
-
-    private static void RunAndWait(string fileName, IEnumerable<string> arguments)
+    private async Task SendClipboardAsync()
     {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = fileName,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true
-            };
-
-            foreach (var argument in arguments)
-                psi.ArgumentList.Add(argument);
-
-            using var process = Process.Start(psi);
-            process?.WaitForExit(1500);
-        }
-        catch
-        {
-            // Best effort only.
-        }
+        var c = _connection; var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (c == null || c.State != 2 || clipboard == null) return;
+        var text = await clipboard.TryGetTextAsync();
+        if (c != _connection || _closed || text == null) return;
+        _status.Text = c.SetClipboard(text) ? "Schránka připravena v RDP (Ctrl+V)" : "Text schránky je příliš velký.";
+        _surface.Focus();
     }
-
-    private static string EscapeAppleScriptString(string value) =>
-        value.Replace("\\", "\\\\").Replace("\"", "\\\"");
-
-    private static string MakeSafeFileName(string value)
+    private async Task ReceiveClipboardAsync()
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var builder = new StringBuilder(value.Length);
-
-        foreach (var c in value.Trim())
-        {
-            builder.Append(Array.IndexOf(invalid, c) >= 0 || c == ':' || char.IsControl(c) ? '_' : c);
-        }
-
-        var result = builder.ToString().Trim();
-        if (string.IsNullOrWhiteSpace(result))
-            return "RDP";
-
-        return result.Length <= 80 ? result : result[..80].Trim();
+        var c = _connection; var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (c == null || clipboard == null) return;
+        // Explicit transfer prevents background tabs overwriting the local clipboard.
+        ulong serial = 0;
+        var text = c.GetClipboard(ref serial);
+        if (text == null) { _status.Text = "Ve vzdálené schránce zatím není text. Použijte Ctrl+C."; return; }
+        await clipboard.SetTextAsync(text);
+        if (!_closed) _status.Text = "Text z RDP je v místní schránce";
     }
-
-    private static string CreateInfoPlist(string executableName, string displayName) =>
-        $"""
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>CFBundleDevelopmentRegion</key>
-            <string>en</string>
-            <key>CFBundleDisplayName</key>
-            <string>{EscapePlistString(displayName)}</string>
-            <key>CFBundleExecutable</key>
-            <string>{EscapePlistString(executableName)}</string>
-            <key>CFBundleIdentifier</key>
-            <string>cz.zasgroup.zaslauncher.rdp.{CreateBundleIdentifierSuffix(executableName)}</string>
-            <key>CFBundleName</key>
-            <string>{EscapePlistString(displayName)}</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
-            <key>CFBundleVersion</key>
-            <string>1</string>
-            <key>LSUIElement</key>
-            <true/>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-        </dict>
-        </plist>
-        """;
-
-    private static string EscapePlistString(string value) =>
-        value
-            .Replace("&", "&amp;")
-            .Replace("<", "&lt;")
-            .Replace(">", "&gt;")
-            .Replace("\"", "&quot;")
-            .Replace("'", "&apos;");
-
-    private static string CreateBundleIdentifierSuffix(string value)
-    {
-        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        return Convert.ToHexString(hashBytes, 0, 8).ToLowerInvariant();
-    }
-
-    private static string MakeWindowClass(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-
-        foreach (var c in value)
-        {
-            builder.Append(char.IsLetterOrDigit(c) ? c : '-');
-        }
-
-        var result = builder.ToString().Trim('-');
-        return string.IsNullOrWhiteSpace(result) ? "rdp" : result.ToLowerInvariant();
-    }
-
-    private sealed record ConnectionAppBundle(
-        string AppPath,
-        string ExecutablePath,
-        string ProcessName,
-        bool UseLaunchServices = true);
 }

@@ -7,7 +7,7 @@
         <RuntimeIdentifiers>osx-x64;osx-arm64;win-x64</RuntimeIdentifiers>
         <ApplicationManifest Condition="'$(RuntimeIdentifier)' == 'win-x64'">app.manifest</ApplicationManifest>
         <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
-        <Version>1.0.0.15</Version>
+        <Version>1.0.0.16</Version>
         <AssemblyName>ZasLauncherGUI</AssemblyName>
         <AssemblyTitle>ZasLauncher</AssemblyTitle>
         <Product>ZasLauncher</Product>
@@ -35,4 +35,13 @@
     <ItemGroup>
       <ProjectReference Include="..\..\Asnet.Karat\_alfa\ZASutility.Standard\ZASutility.Standard.csproj" />
     </ItemGroup>
+    <Target Name="BuildEmbeddedRdp" BeforeTargets="PrepareForBuild"
+            Condition="$([MSBuild]::IsOSPlatform('OSX')) and ('$(RuntimeIdentifier)' == '' or $(RuntimeIdentifier.StartsWith('osx-')))">
+        <Exec Command="bash &quot;$(MSBuildProjectDirectory)/Native/build.sh&quot; &quot;$(MSBuildProjectDirectory)/$(IntermediateOutputPath)rdp&quot; &quot;$(RuntimeIdentifier)&quot;" />
+        <ItemGroup>
+            <_RdpNative Include="$(IntermediateOutputPath)rdp/**/*" Exclude="$(IntermediateOutputPath)rdp/.dependencies.json" />
+            <Content Include="@(_RdpNative)" Link="rdp/%(_RdpNative.RecursiveDir)%(_RdpNative.Filename)%(_RdpNative.Extension)"
+                     CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+        </ItemGroup>
+    </Target>
 </Project>

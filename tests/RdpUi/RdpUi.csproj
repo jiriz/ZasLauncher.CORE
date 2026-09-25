@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><NativeRdpDir Condition="'$(NativeRdpDir)' == ''">../../ZasLauncherGUI/bin/Debug/net10.0/osx-arm64/rdp</NativeRdpDir></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" Version="12.0.3" />
+    <PackageReference Include="Avalonia.Skia" Version="12.0.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.3" />
+    <Compile Include="../../ZasLauncherGUI/Class/RdpSessionControl.cs" Link="RdpSessionControl.cs" />
+    <Compile Include="../../ZasLauncherGUI/Rdp/*.cs" Link="%(Filename)%(Extension)" />
+    <Content Include="$(NativeRdpDir)/**/*.dylib" Link="rdp/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

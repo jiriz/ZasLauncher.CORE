@@ -1,5 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -14,6 +16,8 @@ public partial class RdpManagerWindow : Window
     private const double DefaultHeight = 800;
     private const double MinimumWidth = 900;
     private const double MinimumHeight = 600;
+
+    private bool _closing, _canClose;
 
     public RdpManagerWindow()
     {
@@ -35,26 +39,36 @@ public partial class RdpManagerWindow : Window
                 Title = tabTitle;
         };
 
-        Closing += (_, _) =>
+        Closing += async (_, e) =>
         {
-            foreach (var item in Tabs.Items)
-            {
-                if (item is TabItem tab && FindRdpSessionControl(tab.Content as Control) is { } ctrl)
-                    ctrl.Disconnect();
-            }
-
-            WindowSettingsStore.Save(new WindowSettings
-            {
-                Width = Math.Max(Bounds.Width, MinimumWidth),
-                Height = Math.Max(Bounds.Height, MinimumHeight),
-                X = Position.X,
-                Y = Position.Y
-            });
+            if (_canClose) return;
+            e.Cancel = true;
+            if (_closing) return;
+            await CloseSessionsAsync();
+            Close();
         };
+    }
+
+    private Task? _shutdownTask;
+    public Task CloseSessionsAsync() => _shutdownTask ??= CloseSessionsCoreAsync();
+    private async Task CloseSessionsCoreAsync()
+    {
+        _closing = true;
+        IsEnabled = false;
+        var sessions = Tabs.Items.OfType<TabItem>()
+            .Select(tab => FindRdpSessionControl(tab.Content as Control)).OfType<RdpSessionControl>();
+        await Task.WhenAll(sessions.Select(session => session.CloseAsync()));
+        WindowSettingsStore.Save(new WindowSettings
+        {
+            Width = Math.Max(Bounds.Width, MinimumWidth), Height = Math.Max(Bounds.Height, MinimumHeight),
+            X = Position.X, Y = Position.Y
+        });
+        _canClose = true;
     }
 
     public void AddRdpTab(string name, string host, int port, string username, string password)
     {
+        if (_closing) return;
         var displayEndpoint = RdpEndpoint.Format(host, port);
         var tabTitle = $"{name} – {displayEndpoint} ({username})";
         Control content;
@@ -101,12 +115,13 @@ public partial class RdpManagerWindow : Window
             Tag = tabTitle          // uložíme plný titulek do Tag
         };
 
-        closeButton.Click += (_, e) =>
+        closeButton.Click += async (_, e) =>
         {
             e.Handled = true;
 
+            closeButton.IsEnabled = false;
             if (FindRdpSessionControl(tab.Content as Control) is { } ctrl)
-                ctrl.Disconnect();
+                await ctrl.CloseAsync();
 
             Tabs.Items.Remove(tab);
 
