@@ -43,7 +43,7 @@ public sealed class RdpSessionControl : UserControl
     private bool _started, _closed;
     private Task? _closeTask;
     private bool _inputFailed;
-    private int _mouseX, _mouseY, _lastState = -1;
+    private int _mouseX, _mouseY, _lastState = -1, _lastError = -1;
     private Size _lastSize;
     private DateTime _sizeChanged;
 
@@ -156,7 +156,7 @@ public sealed class RdpSessionControl : UserControl
             if (_closed) return;
             _started = true;
             _status.Text = "Připojuji…";
-            _serial = _cursorSerial = 0; _lastState = -1;
+            _serial = _cursorSerial = 0; _lastState = _lastError = -1;
             _connection = new RdpConnection(_host, _port, _username, _password, 1600, 1000);
             _clipboardSync = new RdpClipboardSync(_connection, text => _status.Text = text);
             _lastSize = default; _inputFailed = false; _surface.Focus();
@@ -194,11 +194,13 @@ public sealed class RdpSessionControl : UserControl
         var c = _connection;
         if (c == null || _closed) return;
         int state = c.State;
-        if (state != _lastState || state == 4)
+        int error = c.Error;
+        if (state != _lastState || error != _lastError)
         {
             _status.Text = state switch { 0 or 1 => "Připojuji…", 2 => "Připojeno",
-                3 => "Odpojeno", _ => $"Připojení selhalo (0x{c.Error:X8})." };
-            _lastState = state; c.Trace("state=" + state);
+                3 => "Odpojeno", _ => $"Připojení selhalo (0x{error:X8})." };
+            _lastState = state; _lastError = error;
+            c.Trace($"state={state} connection-error=0x{error:X8}");
         }
         ulong ignored = 0;
         c.Frame(IntPtr.Zero, 0, 0, 0, out int width, out int height, ref ignored);

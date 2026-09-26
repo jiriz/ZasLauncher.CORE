@@ -15,7 +15,7 @@ seen = {}
 def output(*args):
     return subprocess.check_output(args, text=True)
 
-def visit(source, destination):
+def visit(source, destination, module=False):
     original = source.resolve()
     if destination.name in seen:
         if seen[destination.name] != original:
@@ -28,7 +28,7 @@ def visit(source, destination):
     if source != destination and rebuild:
         shutil.copy2(original, destination)
         os.chmod(destination, 0o755)
-    dependencies = [line.strip().split(' (compatibility')[0] for line in output('otool','-L',str(original)).splitlines()[2:]]
+    dependencies = [line.strip().split(' (compatibility')[0] for line in output('otool','-L',str(original)).splitlines()[1 if module else 2:]]
     for dep in dependencies:
         if dep.startswith(('/usr/lib/', '/System/Library/')): continue
         if not dep.startswith('/'):
@@ -38,11 +38,20 @@ def visit(source, destination):
         if rebuild:
             subprocess.run(['install_name_tool','-change',dep,'@loader_path/'+dependency.name,str(destination)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
     if rebuild:
-        subprocess.run(['install_name_tool','-id','@loader_path/'+destination.name,str(destination)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        if not module:
+            subprocess.run(['install_name_tool','-id','@loader_path/'+destination.name,str(destination)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         subprocess.run(['codesign','--force','--sign','-',str(destination)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
     updated[destination.name] = signature
 
 visit(root/'libzasrdp.dylib', root/'libzasrdp.dylib')
+# OpenSSL loads this module dynamically, so otool -L cannot discover it.
+crypto = seen.get('libcrypto.3.dylib')
+if crypto is None:
+    raise RuntimeError('Bundled OpenSSL 3 library not found')
+provider = crypto.parent / 'ossl-modules' / 'legacy.dylib'
+if not provider.is_file():
+    raise RuntimeError('OpenSSL legacy provider missing beside the matching libcrypto')
+visit(provider, root / 'legacy.dylib', module=True)
 cache_file.write_text(json.dumps(updated, indent=2)+'\n')
 # Keep upstream licence files for the Homebrew formulae supplying bundled libraries.
 licences = root / 'licenses'

@@ -11,6 +11,7 @@
     <Compile Include="../../ZasLauncherGUI/Utility/RdpEndpoint.cs" Link="RdpEndpoint.cs" />
     <Compile Include="../../ZasLauncherGUI/Class/RdpSessionControl.cs" Link="RdpSessionControl.cs" />
     <Compile Include="../../ZasLauncherGUI/Rdp/*.cs" Link="%(Filename)%(Extension)" />
+    <Content Include="$(NativeRdpDir)/../ZasLauncherGUI.dll" Link="ZasLauncherGUI.dll" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(NativeRdpDir)/**/*.dylib" Link="rdp/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

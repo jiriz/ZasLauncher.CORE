@@ -9,6 +9,8 @@ using Avalonia.VisualTree;
 using ZasLauncherGUI.Class;
 using ZasLauncherGUI.Rdp;
 
+// Shared window XAML resolves its production icon from the app assembly.
+System.Reflection.Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "ZasLauncherGUI.dll"));
 AppContext.SetSwitch("ZasLauncher.DisableClipboardSync", true);
 ClipboardContract.Run();
 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));

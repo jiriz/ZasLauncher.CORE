@@ -11,8 +11,22 @@ namespace ZasLauncherGUI.Rdp;
 // Owned by one UI thread. Detach the connection from the UI before StopAsync.
 internal sealed class RdpConnection : IRdpClipboardConnection
 {
+    // Keep the configured bundled OpenSSL loaded for the lifetime of the process.
+    private static readonly IntPtr CryptoLibrary;
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int SetProviderSearchPath(IntPtr context,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+
     static RdpConnection()
     {
+        var nativeDir = Path.Combine(AppContext.BaseDirectory, "rdp");
+        if (!File.Exists(Path.Combine(nativeDir, "legacy.dylib")))
+            throw new InvalidOperationException("V aplikaci chybí modul přihlašování RDP. Nainstalujte celý balíček Launcheru.");
+        CryptoLibrary = NativeLibrary.Load(Path.Combine(nativeDir, "libcrypto.3.dylib"));
+        var setPath = Marshal.GetDelegateForFunctionPointer<SetProviderSearchPath>(
+            NativeLibrary.GetExport(CryptoLibrary, "OSSL_PROVIDER_set_default_search_path"));
+        if (setPath(IntPtr.Zero, nativeDir) != 1)
+            throw new InvalidOperationException("Nelze připravit modul přihlašování RDP.");
         NativeLibrary.SetDllImportResolver(typeof(RdpConnection).Assembly, (name, _, _) =>
             name == "zasrdp" ? NativeLibrary.Load(Path.Combine(AppContext.BaseDirectory, "rdp", "libzasrdp.dylib")) : IntPtr.Zero);
     }
