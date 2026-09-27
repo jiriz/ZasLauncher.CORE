@@ -24,6 +24,10 @@ public sealed class RdpSessionControl : UserControl
     private string _password;
     private readonly int _port;
     private readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly ProgressBar _transferProgress = new() { IsIndeterminate = true, IsVisible = false,
+        Width = 110, Height = 5, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _transferText = new() { IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
+    private bool _receivingFiles;
     private readonly Image _image = new() { Stretch = Stretch.Uniform };
     private readonly Border _surface;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(33) };
@@ -56,7 +60,11 @@ public sealed class RdpSessionControl : UserControl
         // Keep the desktop unobstructed; connection actions belong to its tab header.
         _status.Margin = new Thickness(8, 2);
         var grid = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
-        grid.Children.Add(_surface); Grid.SetRow(_status, 1); grid.Children.Add(_status); Content = grid;
+        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
+        footer.Children.Add(_status);
+        Grid.SetColumn(_transferText, 1); footer.Children.Add(_transferText);
+        Grid.SetColumn(_transferProgress, 2); footer.Children.Add(_transferProgress);
+        grid.Children.Add(_surface); Grid.SetRow(footer, 1); grid.Children.Add(footer); Content = grid;
         _timer.Tick += (_, _) => Refresh();
         Loaded += async (_, _) =>
         {
@@ -158,7 +166,8 @@ public sealed class RdpSessionControl : UserControl
             _status.Text = "Připojuji…";
             _serial = _cursorSerial = 0; _lastState = _lastError = -1;
             _connection = new RdpConnection(_host, _port, _username, _password, 1600, 1000);
-            _clipboardSync = new RdpClipboardSync(_connection, text => _status.Text = text);
+            _clipboardSync = new RdpClipboardSync(_connection, text => _status.Text = text, fileTransfer: active =>
+            { _receivingFiles = active; RefreshTransferIndicator(); });
             _lastSize = default; _inputFailed = false; _surface.Focus();
         }
         catch (DllNotFoundException) { _status.Text = "Chybí knihovna RDP. Použijte kompletní sestavení Launcheru."; }
@@ -180,6 +189,7 @@ public sealed class RdpSessionControl : UserControl
         if (connection != null) { _status.Text = "Odpojuji…"; await connection.StopAsync(); }
         _image.Source = null; _bitmap?.Dispose(); _bitmap = null;
         _surface.Cursor = null; _cursor?.Dispose(); _cursor = null;
+        _receivingFiles = false; RefreshTransferIndicator();
         _status.Text = "Odpojeno";
     }
     public Task CloseAsync() => _closeTask ??= CloseCoreAsync();
@@ -189,10 +199,20 @@ public sealed class RdpSessionControl : UserControl
         await DisconnectAsync();
         _password = string.Empty;
     }
+    private void RefreshTransferIndicator()
+    {
+        bool sending = _connection?.IsSendingFiles == true;
+        bool active = _connection?.State == 2 && (_receivingFiles || sending);
+        _transferText.Text = _receivingFiles && sending ? "Přenos souborů ↔ RDP" :
+            _receivingFiles ? "Příjem souborů z RDP" : "Odesílání souborů do RDP";
+        _transferText.IsVisible = _transferProgress.IsVisible = active;
+    }
+
     private void Refresh()
     {
         var c = _connection;
         if (c == null || _closed) return;
+        RefreshTransferIndicator();
         int state = c.State;
         int error = c.Error;
         if (state != _lastState || error != _lastError)

@@ -42,8 +42,15 @@ static void test_files(Session* s,CliprdrClientContext* c) {
     assert(zr_set_files(s,descriptor,sizeof(descriptor),paths,1));
     CLIPRDR_FILE_CONTENTS_REQUEST req={.streamId=5,.listIndex=0,.dwFlags=FILECONTENTS_SIZE};
     assert(clip_file_request(c,&req)==CHANNEL_RC_OK && returned_count==8 && returned_file[0]==6);
+    assert(!zr_file_sending(s)); // SIZE queries are not a data transfer.
     req.dwFlags=FILECONTENTS_RANGE;req.nPositionLow=2;req.cbRequested=3;
     assert(clip_file_request(c,&req)==CHANNEL_RC_OK && returned_count==3 && !memcmp(returned_file,"cde",3));
+    assert(zr_file_sending(s));
+    atomic_store(&s->file_activity_ms, GetTickCount64()-1001);
+    assert(!zr_file_sending(s)); // No sticky activity after completion or cancellation.
+    atomic_store(&s->file_sending, 1);
+    assert(zr_file_sending(s)); // An in-flight response remains visible even while blocked.
+    atomic_store(&s->file_sending, 0);
     req.listIndex=1;assert(clip_file_request(c,&req)==CHANNEL_RC_OK && returned_flags==CB_RESPONSE_FAIL);
     fd=open(path,O_WRONLY);assert(fd>=0);
     assert(lseek(fd,((off_t)1<<32)+3,SEEK_SET)==(((off_t)1<<32)+3));assert(write(fd,"Z",1)==1);close(fd);

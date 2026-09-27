@@ -31,7 +31,8 @@ internal static class ClipboardContract
         var clipboard=top.Clipboard!;
         var peer=new ClipboardPeer(Array.Empty<string>());
         long version=1;
-        var sync=new RdpClipboardSync(peer, _=>{}, ()=>version);
+        var activity=new List<bool>();
+        var sync=new RdpClipboardSync(peer, _=>{}, ()=>version, active=>activity.Add(active));
         await clipboard.SetTextAsync("Mac → RDP\nřádek 2");
         bool sent=await sync.TransferAsync(top,3);
         Require(peer.Sent=="Mac → RDP\nřádek 2" && sent,"automatic local paste preparation");
@@ -62,6 +63,11 @@ internal static class ClipboardContract
         await clipboard.SetTextAsync("rejected");
         Require(!await sync.TransferAsync(top,3),"rejected transfer reported success");
         Require(!await sync.TransferAsync(top,3),"retry would paste stale clipboard");
+        Require(activity.Count==0,"plain text must not show file transfer activity");
+        // Invalid descriptor fails after download begins: finally must clear the activity.
+        peer.Remote=(2,5,new byte[]{1});
+        await sync.TransferAsync(top,0);
+        Require(activity.SequenceEqual(new[]{true,false}),"file failure left transfer activity visible");
         await sync.StopAsync();
         Console.WriteLine("PASS: automatic bidirectional text, multiline Unicode, suspended tab and newer local copy");
     }

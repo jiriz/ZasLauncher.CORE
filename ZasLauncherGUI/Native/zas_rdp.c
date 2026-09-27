@@ -10,6 +10,7 @@
 #include <freerdp/graphics.h>
 #include <freerdp/codec/color.h>
 #include <winpr/synch.h>
+#include <winpr/sysinfo.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -26,7 +27,8 @@ typedef struct { rdpContext base; Session* owner; } Context;
 struct Session {
     freerdp* instance;
     pthread_mutex_t mutex;
-    atomic_int stop, state;
+    atomic_int stop, state, file_sending;
+    atomic_ullong file_activity_ms;
     BYTE* pixels;
     int width, height;
     uint64_t serial;

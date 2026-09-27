@@ -112,6 +112,8 @@ static UINT clip_file_request(CliprdrClientContext* c,const CLIPRDR_FILE_CONTENT
     if (request->listIndex<(UINT32)s->local_path_count && !request->haveClipDataId)
         file=fopen(s->local_paths[request->listIndex],"rb");
     pthread_mutex_unlock(&s->mutex);
+    BOOL sending = file && request->dwFlags==FILECONTENTS_RANGE;
+    if (sending) atomic_store(&s->file_sending, 1);
     BYTE* buffer=NULL;
     if (file) {
         struct stat info;
@@ -136,6 +138,10 @@ static UINT clip_file_request(CliprdrClientContext* c,const CLIPRDR_FILE_CONTENT
     }
     response.requestedData=buffer;
     UINT rc=c->ClientFileContentsResponse(c,&response);
+    if (sending) {
+        atomic_store(&s->file_activity_ms, GetTickCount64());
+        atomic_store(&s->file_sending, 0);
+    }
     free(buffer);return rc;
 }
 static UINT clip_file_response(CliprdrClientContext* c,const CLIPRDR_FILE_CONTENTS_RESPONSE* response) {
@@ -247,4 +253,10 @@ API void zr_clip_diagnostics(Session* s,char* target,int capacity) {
         (unsigned long long)s->acknowledged_generation,s->clipboard_ack_error,(unsigned long long)s->remote_generation,
         s->remote_kind,s->request_kind,s->file_status,s->server_clip_flags);
     pthread_mutex_unlock(&s->mutex);
+}
+
+// Activity only: the remote peer does not send a whole-transfer completion event.
+API int zr_file_sending(Session* s) {
+    unsigned long long last=atomic_load(&s->file_activity_ms);
+    return atomic_load(&s->file_sending) || (last && GetTickCount64()-last<1000);
 }

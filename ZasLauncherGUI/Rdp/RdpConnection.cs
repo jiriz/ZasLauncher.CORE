@@ -35,6 +35,7 @@ internal sealed class RdpConnection : IRdpClipboardConnection
     private readonly Task<int> _worker;
     private Task? _stopping;
     public int State => _handle == IntPtr.Zero ? 3 : Native.zr_state(_handle);
+    public bool IsSendingFiles => _handle != IntPtr.Zero && State == 2 && Native.zr_file_sending(_handle) != 0;
     public bool IsStopping => _stopping != null;
     public int Error => _worker.IsCompletedSuccessfully ? _worker.Result : 0;
 
@@ -150,6 +151,8 @@ internal sealed class RdpConnection : IRdpClipboardConnection
     }
     private static class Native
     {
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int zr_file_sending(IntPtr session);
         [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int zr_cursor(IntPtr session, byte[] pixels, int capacity, out int width, out int height,
             out int x, out int y, ref ulong serial);

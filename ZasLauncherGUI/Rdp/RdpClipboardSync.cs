@@ -16,6 +16,7 @@ internal sealed class RdpClipboardSync
 {
     private readonly IRdpClipboardConnection _connection;
     private readonly Action<string> _status;
+    private readonly Action<bool>? _fileTransfer;
     private readonly Func<long> _version;
     private readonly bool _enabled, _cleanupCache;
     private CancellationTokenSource? _cancellation;
@@ -27,9 +28,9 @@ internal sealed class RdpClipboardSync
     private bool _suspended, _stopped;
     public static bool Enabled => OperatingSystem.IsMacOS() &&
         !(AppContext.TryGetSwitch("ZasLauncher.DisableClipboardSync", out bool disabled) && disabled);
-    public RdpClipboardSync(IRdpClipboardConnection connection, Action<string> status, Func<long>? version = null)
+    public RdpClipboardSync(IRdpClipboardConnection connection, Action<string> status, Func<long>? version = null, Action<bool>? fileTransfer = null)
     {
-        _connection = connection; _status = status;
+        _connection = connection; _status = status; _fileTransfer = fileTransfer;
         _version = version ?? MacClipboardVersion.Read;
         _enabled = version != null || Enabled;
         _cleanupCache = version == null;
@@ -128,6 +129,7 @@ internal sealed class RdpClipboardSync
                 bool published = false;
                 try
                 {
+                    _fileTransfer?.Invoke(true);
                     downloaded = await ClipboardFiles.DownloadAsync(_connection, snapshot.Data, snapshot.Generation, cancellation, _status);
                     Check(cancellation);
                     if (_connection.ClipboardOffer().Generation != snapshot.Generation) throw new OperationCanceledException();
@@ -144,7 +146,7 @@ internal sealed class RdpClipboardSync
                     await clipboard.SetFilesAsync(files);
                     published = true;
                 }
-                finally { if (!published && downloaded is { Length: > 0 }) ClipboardFiles.RemoveDownload(downloaded[0]); }
+                finally { _fileTransfer?.Invoke(false); if (!published && downloaded is { Length: > 0 }) ClipboardFiles.RemoveDownload(downloaded[0]); }
             }
             _operationVersion = _localVersion = _version();
             _connection.Trace("remote-copy published");
