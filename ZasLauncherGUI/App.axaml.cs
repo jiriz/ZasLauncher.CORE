@@ -149,6 +149,21 @@ public partial class App : Application
 
         menu.Items.Add(new NativeMenuItemSeparator());
 
+        menu.Items.Add(CreateMenuItem(null, "Uspořádat okna IS Karat", async () =>
+        {
+            try
+            {
+                var result = await KaratWindowLayout.ArrangeAsync();
+                await MessageBoxManager.GetMessageBoxStandard("Uspořádání oken IS Karat", result,
+                    ButtonEnum.Ok, Icon.Info).ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                await MessageBoxManager.GetMessageBoxStandard("Uspořádání oken IS Karat", ex.Message,
+                    ButtonEnum.Ok, Icon.Error).ShowAsync();
+            }
+        }, "", string.Empty));
+
         menu.Items.Add(CreateMenuItem(null, "Ukončit všechny IS Karat", async () =>
         {
             await Utils.KillProcessesAsync("ISKarat.Loader.Win");

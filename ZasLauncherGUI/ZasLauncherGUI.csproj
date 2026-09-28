@@ -7,7 +7,7 @@
         <RuntimeIdentifiers>osx-x64;osx-arm64;win-x64</RuntimeIdentifiers>
         <ApplicationManifest Condition="'$(RuntimeIdentifier)' == 'win-x64'">app.manifest</ApplicationManifest>
         <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
-        <Version>1.0.0.26</Version>
+        <Version>1.0.0.27</Version>
         <ApplicationIcon>Assets/zasgroup.ico</ApplicationIcon>
         <AssemblyName>ZasLauncherGUI</AssemblyName>
         <AssemblyTitle>ZasLauncher</AssemblyTitle>
@@ -32,6 +32,7 @@
     </ItemGroup>
     <ItemGroup>
         <AvaloniaResource Include="Assets/*" />
+        <EmbeddedResource Include="Utility/KaratWindowLayoutNative.cs" LogicalName="KaratWindowLayoutNative.cs" />
     </ItemGroup>
     <ItemGroup>
       <ProjectReference Include="..\..\Asnet.Karat\_alfa\ZASutility.Standard\ZASutility.Standard.csproj" />
