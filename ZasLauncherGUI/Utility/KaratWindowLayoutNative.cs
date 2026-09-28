@@ -31,7 +31,7 @@ namespace ZasLauncherGUI.Utility
             int width = monitor.Right - monitor.Left, height = monitor.Bottom - monitor.Top;
             if (width != 5120 || height <= 0 || width <= 2L * height) return false;
             bounds.Left = Math.Max(work.Left, monitor.Left + 1500);
-            bounds.Right = Math.Min(work.Right, monitor.Left + 5120);
+            bounds.Right = Math.Min(work.Right, monitor.Left + 3620);
             return bounds.Right > bounds.Left && bounds.Bottom > bounds.Top;
         }
 

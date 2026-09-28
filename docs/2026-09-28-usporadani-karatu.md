@@ -1,10 +1,10 @@
-# Uspořádání oken KARATu – ZasLauncher 1.0.0.27
+# Uspořádání oken KARATu – ZasLauncher 1.0.0.29
 
 Nová nabídka **Uspořádat okna IS Karat** je přímo nad **Ukončit všechny IS Karat**.
 Vyhledá viditelná hlavní okna procesů `ISKarat.Loader.Win`. Dialogy ponechá beze změn.
 Každé okno zůstane na současném monitoru. Běžné monitory maximalizují okna.
 Na ultraširokém monitoru šířky přesně 5120 fyzických pixelů (poměr stran větší než 2:1)
-se okno obnoví a nastaví do oblasti od x=1500 po x=5120 vůči levému okraji tohoto monitoru.
+se okno obnoví a nastaví do oblasti od x=1500 po x=3620 vůči levému okraji tohoto monitoru.
 Výška využije pracovní plochu; hlavní panel Windows zůstane přístupný. Běžný 5K monitor 5120×2880 se maximalizuje.
 
 Na Windows se upravuje aktuální desktop. Na macOS se přes Parallels provede stejná operace
@@ -26,5 +26,11 @@ Počty předaných požadavků neznamenají následné měření skutečné polo
 
 ## Distribuce
 
-`ZasLauncher-1.0.0.27-mac-arm64.zip` a `ZasLauncher-1.0.0.27-win-x64.zip` jsou v iCloud/Stahování.
-Mac aplikace: `/Users/jiriz/ZasLauncher-builds/1.0.0.27/ZasLauncher.app`.
+`ZasLauncher-1.0.0.29-mac-arm64.zip` a `ZasLauncher-1.0.0.29-win-x64.zip` jsou v iCloud/Stahování.
+Mac aplikace: `/Users/jiriz/ZasLauncher-builds/1.0.0.29/ZasLauncher.app`.
+
+## Úprava 1.0.0.29
+
+Na přání Jiřího posunut pravý okraj o 1500 px doleva: výsledná šířka je 2120 px.
+Součástí je také oprava diakritiky z 1.0.0.28 (commit `7bb0d73`).
+Testy všech šesti rozložení prošly i s novými souřadnicemi.
