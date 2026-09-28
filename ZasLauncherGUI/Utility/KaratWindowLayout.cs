@@ -26,7 +26,7 @@ internal static class KaratWindowLayout
                 ?? throw new InvalidOperationException("Chybí modul uspořádání oken.");
             using var reader = new StreamReader(source);
             var script = "$ErrorActionPreference='Stop'; Add-Type -TypeDefinition @'\n" + await reader.ReadToEndAsync() +
-                "\n'@; [ZasLauncherGUI.Utility.KaratWindowLayoutNative]::Apply($false)";
+                "\n'@; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ZasLauncherGUI.Utility.KaratWindowLayoutNative]::Apply($false)))";
             // Keep prlctl's command line below the guest transport limit.
             using var compressed = new MemoryStream();
             using (var gzip = new GZipStream(compressed, CompressionLevel.Optimal, true))
@@ -49,7 +49,8 @@ internal static class KaratWindowLayout
                 {
                     var result = await RunAsync(executable, "exec", id, "--current-user", "powershell.exe",
                         "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", bootstrap);
-                    report.AppendLine(name + ": " + result.Trim());
+                    // ASCII transport avoids the Windows console code page corrupting Czech text.
+                    report.AppendLine(name + ": " + Encoding.UTF8.GetString(Convert.FromBase64String(result.Trim())));
                 }
                 catch (Exception ex) { report.AppendLine(name + ": " + ex.Message); }
             }
