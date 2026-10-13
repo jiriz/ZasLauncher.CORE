@@ -39,10 +39,23 @@ internal sealed class RdpConnection : IRdpClipboardConnection
     public bool IsStopping => _stopping != null;
     public int Error => _worker.IsCompletedSuccessfully ? _worker.Result : 0;
 
-    public RdpConnection(string host, int port, string user, string password, int width, int height)
+    public RdpConnection(string host, int port, string user, string password, int width, int height, string gateway = "", int gatewayMethod = 0)
     {
         _handle = Native.zr_create(host, port, user, password, width, height, CultureInfo.CurrentCulture.KeyboardLayoutId);
         if (_handle == IntPtr.Zero) throw new InvalidOperationException("Nelze vytvořit RDP připojení.");
+        if (gatewayMethod is 1 or 2 or 3)
+        {
+            try
+            {
+                if (!Uri.TryCreate("https://" + gateway.Trim(), UriKind.Absolute, out var uri) ||
+                    string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length != 0 || uri.AbsolutePath != "/" ||
+                    uri.Query.Length != 0 || uri.Fragment.Length != 0 ||
+                    Native.zr_gateway(_handle, uri.Host, uri.Port, gatewayMethod) == 0)
+                    throw new InvalidOperationException("Nelze nastavit RDP gateway. Zkontrolujte její adresu a způsob použití v KARATu.");
+            }
+            catch { Native.zr_free(_handle); _handle = IntPtr.Zero; throw; }
+        }
+        Trace("gateway-mode=" + gatewayMethod);
         Trace("created version=" + typeof(RdpConnection).Assembly.GetName().Version);
         var handle = _handle;
         _worker = Task.Factory.StartNew(() => Native.zr_run(handle), CancellationToken.None,
@@ -176,6 +189,8 @@ internal sealed class RdpConnection : IRdpClipboardConnection
             [MarshalAs(UnmanagedType.LPUTF8Str)] string user, [MarshalAs(UnmanagedType.LPUTF8Str)] string password,
             int width, int height, int keyboardLayout);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int zr_run(IntPtr session);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int zr_gateway(IntPtr session, [MarshalAs(UnmanagedType.LPUTF8Str)] string host, int port, int method);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern void zr_stop(IntPtr session);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern void zr_free(IntPtr session);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int zr_state(IntPtr session);

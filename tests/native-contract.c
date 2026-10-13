@@ -82,6 +82,22 @@ static void test_files(Session* s,CliprdrClientContext* c) {
     puts("PASS: file clipboard size/range serving, descriptors, incoming chunks, stale generation and cancellation");
 }
 int main(void) {
+    Session* gateway = zr_create("target.example",3389,"DOMAIN\\tester","synthetic",800,600,0);
+    assert(gateway);
+    rdpSettings* settings = gateway->instance->context->settings;
+    assert(!freerdp_settings_get_bool(settings, FreeRDP_GatewayEnabled));
+    assert(!zr_gateway(gateway,"",443,1));
+    assert(!zr_gateway(gateway,"gateway.example",0,1));
+    assert(zr_gateway(gateway,"gateway.example",443,1));
+    assert(freerdp_settings_get_bool(settings,FreeRDP_GatewayEnabled));
+    assert(freerdp_settings_get_bool(settings,FreeRDP_GatewayRpcTransport));
+    assert(!freerdp_settings_get_bool(settings,FreeRDP_GatewayHttpTransport));
+    assert(!strcmp(freerdp_settings_get_string(settings,FreeRDP_GatewayHostname),"gateway.example"));
+    assert(!strcmp(freerdp_settings_get_string(settings,FreeRDP_GatewayUsername),"tester"));
+    assert(!strcmp(freerdp_settings_get_string(settings,FreeRDP_GatewayDomain),"DOMAIN"));
+    assert(!strcmp(freerdp_settings_get_string(settings,FreeRDP_GatewayPassword),"synthetic"));
+    zr_free(gateway);
+
     Session s = {0}; pthread_mutex_init(&s.mutex, NULL);
     BYTE source[] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
     BYTE target[24]; memset(target, 0xff, sizeof(target));

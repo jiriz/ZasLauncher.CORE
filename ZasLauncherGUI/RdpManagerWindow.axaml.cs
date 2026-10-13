@@ -67,7 +67,7 @@ public partial class RdpManagerWindow : Window
         _canClose = true;
     }
 
-    public void AddRdpTab(string name, string host, int port, string username, string password)
+    public void AddRdpTab(string name, string host, int port, string username, string password, string gateway = "", int gatewayMethod = 0)
     {
         if (_closing) return;
         name = name.Trim();
@@ -77,7 +77,7 @@ public partial class RdpManagerWindow : Window
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            content = new RdpSessionControl(host, port, username, password, tabTitle);
+            content = new RdpSessionControl(host, port, username, password, tabTitle, gateway, gatewayMethod);
         }
         else
         {

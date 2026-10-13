@@ -213,6 +213,25 @@ fail:
     if (s->instance) { freerdp_context_free(s->instance); freerdp_free(s->instance); }
     pthread_mutex_destroy(&s->mutex); free(s); return NULL;
 }
+// Configure before zr_run; keep zr_create ABI compatible with existing test clients.
+API int zr_gateway(Session* s, const char* host, int port, int method) {
+    if (!s || !host || !*host || port < 1 || port > 65535 || method < 1 || method > 3)
+        return 0;
+    rdpSettings* p = s->instance->context->settings;
+    return freerdp_settings_set_string(p, FreeRDP_GatewayHostname, host) &&
+        freerdp_settings_set_uint32(p, FreeRDP_GatewayPort, port) &&
+        freerdp_set_gateway_usage_method(p, method) &&
+        // Use the RPC-over-HTTPS gateway transport (also supported by older RD Gateways).
+        freerdp_settings_set_bool(p, FreeRDP_GatewayHttpTransport, FALSE) &&
+        freerdp_settings_set_bool(p, FreeRDP_GatewayRpcTransport, TRUE) &&
+        freerdp_settings_set_bool(p, FreeRDP_GatewayUseSameCredentials, TRUE) &&
+        freerdp_settings_set_string(p, FreeRDP_GatewayUsername,
+            freerdp_settings_get_string(p, FreeRDP_Username)) &&
+        freerdp_settings_set_string(p, FreeRDP_GatewayDomain,
+            freerdp_settings_get_string(p, FreeRDP_Domain)) &&
+        freerdp_settings_set_string(p, FreeRDP_GatewayPassword,
+            freerdp_settings_get_string(p, FreeRDP_Password));
+}
 // Bounded queue; callers retry key/button releases on overflow. Move events coalesce.
 API int zr_input(Session* s, int type, int a, int b, int c) {
     if (atomic_load(&s->state) != 2 || atomic_load(&s->stop)) return 0;

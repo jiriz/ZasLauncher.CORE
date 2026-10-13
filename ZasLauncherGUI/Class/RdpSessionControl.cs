@@ -22,7 +22,8 @@ public sealed class RdpSessionControl : UserControl
 {
     private readonly string _host, _username;
     private string _password;
-    private readonly int _port;
+    private readonly int _port, _gatewayMethod;
+    private readonly string _gateway;
     private readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly ProgressBar _transferProgress = new() { IsIndeterminate = true, IsVisible = false,
         Width = 110, Height = 5, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -51,8 +52,9 @@ public sealed class RdpSessionControl : UserControl
     private Size _lastSize;
     private DateTime _sizeChanged;
 
-    public RdpSessionControl(string host, int port, string username, string password, string windowTitle)
+    public RdpSessionControl(string host, int port, string username, string password, string windowTitle, string gateway = "", int gatewayMethod = 0)
     {
+        _gateway = gateway; _gatewayMethod = gatewayMethod;
         _host = host; _port = port; _username = username; _password = password;
         _surface = new Border { Background = Brushes.Black, Child = _image, Focusable = true,
             ClipToBounds = true, HorizontalAlignment = HorizontalAlignment.Stretch,
@@ -165,7 +167,7 @@ public sealed class RdpSessionControl : UserControl
             _started = true;
             _status.Text = "Připojuji…";
             _serial = _cursorSerial = 0; _lastState = _lastError = -1;
-            _connection = new RdpConnection(_host, _port, _username, _password, 1600, 1000);
+            _connection = new RdpConnection(_host, _port, _username, _password, 1600, 1000, _gateway, _gatewayMethod);
             _clipboardSync = new RdpClipboardSync(_connection, text => _status.Text = text, fileTransfer: active =>
             { _receivingFiles = active; RefreshTransferIndicator(); });
             _lastSize = default; _inputFailed = false; _surface.Focus();

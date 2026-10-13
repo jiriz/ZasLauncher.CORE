@@ -420,9 +420,14 @@ public partial class App : Application
                     int rdpPort = MyUtility.StringToInt(MyStringExtensions.GetDirective(rdpParams, "RDP_PORT"));
                     var rdpEndpoint = RdpEndpoint.Normalize(rdpServer, rdpPort);
 
+                    string gateway = MyStringExtensions.GetDirective(rdpParams, "RDP_GW").Trim();
+                    string gatewayMethodText = MyStringExtensions.GetDirective(rdpParams, "RDP_GW_METHOD").Trim();
+                    int gatewayMethod = string.IsNullOrEmpty(gatewayMethodText) ? 0 :
+                        int.TryParse(gatewayMethodText, out var method) && method is >= 0 and <= 4 ? method :
+                        throw new InvalidOperationException("Neplatný způsob použití RDP gateway.");
                     var tabName = string.IsNullOrEmpty(rdpName) ? name : rdpName;
 
-                    OpenRdpTab(tabName, rdpEndpoint.Host, rdpEndpoint.Port, rdpUser, rdpPass);
+                    OpenRdpTab(tabName, rdpEndpoint.Host, rdpEndpoint.Port, rdpUser, rdpPass, gateway, gatewayMethod);
                 }
                 else
                 {
@@ -446,7 +451,7 @@ public partial class App : Application
         }
     }
     
-    private void OpenRdpTab(string name, string host, int port, string username, string password)
+    private void OpenRdpTab(string name, string host, int port, string username, string password, string gateway, int gatewayMethod)
     {
         if (_exiting) return;
         if (_rdpWindow == null)
@@ -460,7 +465,7 @@ public partial class App : Application
             };
         }
 
-        _rdpWindow.AddRdpTab(name, host, port, username, password);
+        _rdpWindow.AddRdpTab(name, host, port, username, password, gateway, gatewayMethod);
         MacDockIcon.SetVisible(true);
         _rdpWindow.Show();
         _rdpWindow.Activate();
