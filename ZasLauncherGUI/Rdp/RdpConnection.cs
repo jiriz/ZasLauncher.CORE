@@ -58,7 +58,19 @@ internal sealed class RdpConnection : IRdpClipboardConnection
         Trace("gateway-mode=" + gatewayMethod);
         Trace("created version=" + typeof(RdpConnection).Assembly.GetName().Version);
         var handle = _handle;
-        _worker = Task.Factory.StartNew(() => Native.zr_run(handle), CancellationToken.None,
+        _worker = Task.Factory.StartNew(() =>
+        {
+            using var activity = new MacRdpActivity();
+            RdpTrace.Write(_traceId, "background-activity=" + activity.Active);
+            try { return Native.zr_run(handle); }
+            finally
+            {
+                var diagnostics = new byte[256];
+                Native.zr_end_diagnostics(handle, diagnostics, diagnostics.Length);
+                int length = Array.IndexOf(diagnostics, (byte)0);
+                RdpTrace.Write(_traceId, Encoding.UTF8.GetString(diagnostics, 0, length < 0 ? diagnostics.Length : length));
+            }
+        }, CancellationToken.None,
             TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
     public void Trace(string state)
@@ -183,6 +195,8 @@ internal sealed class RdpConnection : IRdpClipboardConnection
         internal static extern int zr_clip_sent(IntPtr session);
         [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
         internal static extern void zr_clip_diagnostics(IntPtr session, byte[] target, int capacity);
+        [DllImport("zasrdp", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void zr_end_diagnostics(IntPtr session, byte[] target, int capacity);
         private const string Library = "zasrdp";
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
         internal static extern IntPtr zr_create([MarshalAs(UnmanagedType.LPUTF8Str)] string host, int port,

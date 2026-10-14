@@ -28,6 +28,7 @@ struct Session {
     freerdp* instance;
     pthread_mutex_t mutex;
     atomic_int stop, state, file_sending;
+    char end_diagnostics[256];
     atomic_ullong file_activity_ms;
     BYTE* pixels;
     int width, height;
@@ -278,19 +279,35 @@ static BOOL drain(Session* s) {
     if (notify && s->clipboard && advertise_clip(s) != CHANNEL_RC_OK) return FALSE;
     return !s->clipboard || clipboard_drain(s);
 }
+// Called by the worker after zr_run, before the session can be freed.
+API void zr_end_diagnostics(Session* s, char* target, int capacity) {
+    if (target && capacity > 0) snprintf(target, (size_t)capacity, "%s", s->end_diagnostics);
+}
 API int zr_run(Session* s) {
     if (atomic_load(&s->stop)) { atomic_store(&s->state, 3); return 0; }
     atomic_store(&s->state, 1);
+    const char* reason = "connect-failed";
+    DWORD wait_error = 0;
     BOOL connected = freerdp_connect(s->instance);
     if (connected) {
+        reason = "remote-disconnect";
         while (!atomic_load(&s->stop) && !freerdp_shall_disconnect_context(s->instance->context)) {
             HANDLE handles[MAXIMUM_WAIT_OBJECTS];
             DWORD count = freerdp_get_event_handles(s->instance->context, handles, MAXIMUM_WAIT_OBJECTS);
-            if (!count || WaitForMultipleObjects(count, handles, FALSE, 10) == WAIT_FAILED ||
-                !freerdp_check_event_handles(s->instance->context) || !drain(s)) break;
+            if (!count) { reason = "no-event-handles"; break; }
+            if (WaitForMultipleObjects(count, handles, FALSE, 10) == WAIT_FAILED) {
+                wait_error = GetLastError(); reason = "event-wait-failed"; break;
+            }
+            if (!freerdp_check_event_handles(s->instance->context)) { reason = "protocol-events-failed"; break; }
+            if (!drain(s)) { reason = "input-or-channel-send-failed"; break; }
         }
     }
     UINT32 error = freerdp_get_last_error(s->instance->context);
+    UINT32 server_error = freerdp_error_info(s->instance);
+    if (atomic_load(&s->stop)) reason = "local-stop";
+    snprintf(s->end_diagnostics, sizeof(s->end_diagnostics),
+        "protocol-end reason=%s connected=%d error=0x%08x server-error=0x%08x wait-error=%u",
+        reason, connected, error, server_error, wait_error);
     freerdp_disconnect(s->instance);
     atomic_store(&s->state, (!connected || error) && !atomic_load(&s->stop) ? 4 : 3);
     return atomic_load(&s->stop) ? 0 : (int)error;

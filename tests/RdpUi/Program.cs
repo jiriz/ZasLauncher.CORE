@@ -17,6 +17,15 @@ using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
 await using var session = HeadlessUnitTestSession.StartNew(typeof(TestApp));
 await session.Dispatch(async () =>
 {
+    if (OperatingSystem.IsMacOS())
+    {
+        using var firstActivity = new MacRdpActivity();
+        using var secondActivity = new MacRdpActivity();
+        if (!firstActivity.Active || !secondActivity.Active) throw new Exception("RDP background activity was not acquired");
+        firstActivity.Dispose(); firstActivity.Dispose();
+        if (firstActivity.Active || !secondActivity.Active) throw new Exception("RDP activity lifetime is not independent");
+        Console.WriteLine("PASS: macOS background activities acquired, independent, released idempotently");
+    }
     int port = int.Parse(Environment.GetEnvironmentVariable("ZAS_RDP_TEST_PORT")!);
     if(Environment.GetEnvironmentVariable("ZAS_RDP_CLIPBOARD_PEER")=="1")
     {
